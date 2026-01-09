@@ -1,73 +1,69 @@
-# React + TypeScript + Vite
+## Hill Chart Prototype
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A small React + TypeScript app for visualizing Shape Up–style **hill charts**.  
+Each dot on the hill represents a **scope** within a project; you drag dots along the hill to show where the scope is (uphill / crest / downhill / done). Data is stored in the browser’s `localStorage`.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Features
 
-## React Compiler
+1. One hill per browser tab (simple prototype).
+2. Each dot = a scope, not Jira stories/tasks.
+3. Drag & drop dots along the hill to update position.
+4. Phase labels derived from position:
+   - 0–25: Uphill – still figuring it out  
+   - 25–50: Crest – approach is clear  
+   - 50–80: Downhill – executing  
+   - 80–100: Done / rollout
+5. State is saved locally so positions persist between sessions on the same machine.
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Prerequisites
 
-## Expanding the ESLint configuration
+- Node: 18+ (22.x recommended)  
+- npm: 9+
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+**Check versions:**
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+node -v
+npm -v---
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Getting started
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+**Clone and install:**
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+git clone git@github.com:deeptichatur/hill-chart.git
+cd hill-chart
+npm install**Run the dev server:**
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+npm run devThen open the URL printed in the terminal (usually `http://localhost:5173`).
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+---
+
+## Using the hill chart
+1. Open your Jira Epics in another window/tab.
+2. In the app:
+   - Click “+ Add Epic”.
+   - For **Key**, paste your Jira Epic key (or use `PROJECT:Scope name` if you prefer).
+   - Give it a short **Title** (1–3 words) describing the scope.
+3. Drag the dot for each scope along the hill based on the team’s discussion:
+   - Left side: still shaping / unknowns.  
+   - Top / middle: risky bits are understood; solution is clear.  
+   - Right side: mostly execution, QA, rollout.
+4. The table under the hill shows:
+   - Key, title, numeric position (`0–100%`), and phase label.
+5. Positions are saved in your browser’s `localStorage` so you can reopen the app next week and see movement.
+
+---
+
+## How to use this with your team
+
+- **Per project**
+  - Define a set of scopes (Shape Up style) for the project.
+  - Add one dot per scope.
+
+- **Weekly ritual**
+  - Open the hill chart in the team meeting.
+  - For each scope, ask “where are we on the hill now?” and drag accordingly.
+  - Capture screenshots for sharing in Slack/Confluence or leadership updates.
+
