@@ -4,6 +4,14 @@ import HillChart, {
   type HillPhase,
   computePhase,
 } from "./HillChart";
+import ProjectSelector from "./components/ProjectSelector";
+import Toast from "./components/Toast";
+import {
+  getProjectData,
+  saveProjectData,
+  type Project,
+  type ProjectData,
+} from "./services/firestoreService";
 
 const STORAGE_KEY = "hillChartEpics_v1";
 
@@ -36,6 +44,24 @@ function convertScopesToEpics(scopes: Scope[]): EpicDot[] {
     title: scope.name,
     x: scope.progress,
   }));
+}
+
+function convertEpicsToScopes(epics: EpicDot[], _projectName: string): Scope[] {
+  return epics.map((epic, index) => {
+    // Extract ID from key (e.g., "SCOPE-1" -> 1) or use index
+    const idMatch = epic.key.match(/SCOPE-(\d+)/);
+    const id = idMatch ? parseInt(idMatch[1], 10) : index + 1;
+    
+    return {
+      id,
+      name: epic.title,
+      progress: epic.x,
+      direction: computePhase(epic.x) === "UPHILL" ? "uphill" : 
+                 computePhase(epic.x) === "CREST" ? "crest" :
+                 computePhase(epic.x) === "DOWNHILL" ? "downhill" : "done",
+      status: epic.x >= 80 ? "done" : "in_progress",
+    };
+  });
 }
 
 function formatDateForFilename(date: Date): string {
@@ -128,32 +154,72 @@ function phaseLabel(phase: HillPhase): string {
 }
 
 const App: React.FC = () => {
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [epics, setEpics] = useState<EpicDot[]>(() => loadInitialEpics());
   const [projectName, setProjectName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [currentDate, setCurrentDate] = useState<Date | null>(null);
   const [hasPreviousDay, setHasPreviousDay] = useState(false);
   const [hasNextDay, setHasNextDay] = useState(false);
   // Store uploaded files in memory keyed by date string (YYYY-MM-DD)
   const [uploadedFiles, setUploadedFiles] = useState<Map<string, HillChartData>>(new Map());
+  // Toast notification state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  // Auto-load JSON data on mount
+  // Load project data from Firestore when project is selected
   useEffect(() => {
-    loadHillChartData().then((data) => {
-      if (data && data.scopes.length > 0) {
-        const convertedEpics = convertScopesToEpics(data.scopes);
-        setEpics(convertedEpics);
-        setProjectName(data.project);
-        // Try to parse date from generated field or filename
-        if (data.generated) {
-          const parsedDate = new Date(data.generated);
-          if (!isNaN(parsedDate.getTime())) {
-            setCurrentDate(parsedDate);
+    if (!selectedProjectId) {
+      // If no project selected, try to load from local file (backward compatibility)
+      loadHillChartData().then((data) => {
+        if (data && data.scopes.length > 0) {
+          const convertedEpics = convertScopesToEpics(data.scopes);
+          setEpics(convertedEpics);
+          setProjectName(data.project);
+          // Try to parse date from generated field or filename
+          if (data.generated) {
+            const parsedDate = new Date(data.generated);
+            if (!isNaN(parsedDate.getTime())) {
+              setCurrentDate(parsedDate);
+            }
           }
         }
-      }
-    });
-  }, []);
+      });
+      return;
+    }
+
+    // Load from Firestore
+    setIsLoading(true);
+    const currentProjectName = selectedProjectName;
+    getProjectData(selectedProjectId)
+      .then((data) => {
+        if (data && data.scopes && data.scopes.length > 0) {
+          const convertedEpics = convertScopesToEpics(data.scopes);
+          setEpics(convertedEpics);
+          setProjectName(data.project);
+          if (data.generated) {
+            const parsedDate = new Date(data.generated);
+            if (!isNaN(parsedDate.getTime())) {
+              setCurrentDate(parsedDate);
+            }
+          }
+        } else {
+          // New project - start with empty epics
+          setEpics([]);
+          setProjectName(currentProjectName || null);
+          setCurrentDate(null);
+        }
+      })
+      .catch((error) => {
+        console.error("Error loading project data:", error);
+        alert("Failed to load project data. Please try again.");
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
 
   // Check for previous/next day files when date changes
   useEffect(() => {
@@ -254,12 +320,75 @@ const App: React.FC = () => {
     setEpics((prev) => prev.filter((e) => e.key !== key));
   };
 
+  const handleProjectSelect = (projectId: string | null) => {
+    setSelectedProjectId(projectId);
+  };
+
+  const handleProjectCreated = (project: Project) => {
+    setSelectedProjectName(project.name);
+    setSelectedProjectId(project.id);
+  };
+
+  const handleSaveToFirestore = async () => {
+    if (!selectedProjectId) {
+      setToast({
+        message: "Please select a project first",
+        type: 'error',
+      });
+      return;
+    }
+
+    if (epics.length === 0) {
+      setToast({
+        message: "No scopes to save. Add at least one scope before saving.",
+        type: 'error',
+      });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const scopes = convertEpicsToScopes(epics, selectedProjectName || projectName || "Untitled Project");
+      const projectData: ProjectData = {
+        project: selectedProjectName || projectName || "Untitled Project",
+        generated: new Date().toISOString(),
+        task_completion: {
+          completed: epics.filter((e) => e.x >= 80).length,
+          total: epics.length,
+          percentage: epics.length > 0 
+            ? (epics.filter((e) => e.x >= 80).length / epics.length) * 100 
+            : 0,
+        },
+        scopes,
+      };
+
+      await saveProjectData(selectedProjectId, projectData);
+      setProjectName(projectData.project);
+      setCurrentDate(new Date());
+      setToast({
+        message: "Project data saved successfully!",
+        type: 'success',
+      });
+    } catch (error) {
+      console.error("Error saving project data:", error);
+      setToast({
+        message: "Failed to save project data. Please try again.",
+        type: 'error',
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     if (!file.name.endsWith(".json")) {
-      alert("Please upload a JSON file");
+      setToast({
+        message: "Please upload a JSON file",
+        type: 'error',
+      });
       return;
     }
 
@@ -273,7 +402,10 @@ const App: React.FC = () => {
 
         // Validate the data structure
         if (!data.scopes || !Array.isArray(data.scopes) || data.scopes.length === 0) {
-          alert("Invalid JSON format: 'scopes' array is required and must not be empty");
+          setToast({
+            message: "Invalid JSON format: 'scopes' array is required and must not be empty",
+            type: 'error',
+          });
           setIsLoading(false);
           return;
         }
@@ -305,9 +437,16 @@ const App: React.FC = () => {
           setCurrentDate(parsedDate);
         }
 
-        alert(`Successfully imported ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""}`);
+        // Show toast notification
+        setToast({
+          message: `Imported ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""}`,
+          type: 'success',
+        });
       } catch (error) {
-        alert(`Error parsing JSON file: ${error instanceof Error ? error.message : String(error)}`);
+        setToast({
+          message: `Error parsing JSON file: ${error instanceof Error ? error.message : String(error)}`,
+          type: 'error',
+        });
       } finally {
         setIsLoading(false);
         // Reset the input so the same file can be uploaded again
@@ -316,7 +455,10 @@ const App: React.FC = () => {
     };
 
     reader.onerror = () => {
-      alert("Error reading file");
+      setToast({
+        message: "Error reading file",
+        type: 'error',
+      });
       setIsLoading(false);
       event.target.value = "";
     };
@@ -325,15 +467,29 @@ const App: React.FC = () => {
   };
 
   return (
-    <div
-      style={{
-        fontFamily:
-          '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
-        padding: 24,
-        maxWidth: 1100,
-        margin: "0 auto",
-      }}
-    >
+    <>
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
+      <div
+        style={{
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+          padding: 24,
+          maxWidth: 1100,
+          margin: "0 auto",
+        }}
+      >
+      <ProjectSelector
+        selectedProjectId={selectedProjectId}
+        onProjectSelect={handleProjectSelect}
+        onProjectCreated={handleProjectCreated}
+      />
+      
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ display: "flex", gap: 4 }}>
@@ -383,7 +539,26 @@ const App: React.FC = () => {
             )}
           </h2>
         </div>
-        <div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {selectedProjectId && (
+            <button
+              type="button"
+              onClick={handleSaveToFirestore}
+              disabled={isSaving || isLoading}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 4,
+                border: "1px solid #22c55e",
+                background: "#22c55e",
+                color: "white",
+                fontSize: 13,
+                cursor: isSaving || isLoading ? "not-allowed" : "pointer",
+                opacity: isSaving || isLoading ? 0.6 : 1,
+              }}
+            >
+              {isSaving ? "Saving..." : "Save to Firestore"}
+            </button>
+          )}
           <input
             type="file"
             accept=".json"
@@ -411,7 +586,10 @@ const App: React.FC = () => {
         </div>
       </div>
       <p style={{ marginBottom: 16, color: "#4b5563" }}>
-        Drag dots along the hill to reflect where each scope is. Positions are saved locally.
+        Drag dots along the hill to reflect where each scope is. 
+        {selectedProjectId 
+          ? " Click 'Save to Firestore' to save your changes." 
+          : " Positions are saved locally. Select a project to save to Firestore."}
       </p>
 
       <HillChart epics={epics} onUpdateEpicX={handleUpdateEpicX} />
@@ -493,16 +671,16 @@ const App: React.FC = () => {
         <div style={{ flex: 1 }}>
           <h3 style={{ marginBottom: 8 }}>How to use</h3>
           <ol style={{ fontSize: 13, color: "#4b5563", paddingLeft: 18 }}>
+            <li>Select or create a project to get started.</li>
             <li>Click "Upload JSON File" to upload and load scopes from a JSON file.</li>
             <li>Drag dots along the hill to update their position.</li>
-            <li>
-              Positions are saved in your browser's localStorage, so they persist between sessions.
-            </li>
+            <li>Click "Save to Firestore" to save your changes to the cloud.</li>
             <li>Use "Add Epic" to manually add additional scopes.</li>
           </ol>
         </div>
       </div>
     </div>
+    </>
   );
 };
 
