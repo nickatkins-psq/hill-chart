@@ -41,6 +41,13 @@ npm run devThen open the URL printed in the terminal (usually `http://localhost:
 ---
 
 ## Using the hill chart
+### Method 1
+1. Click "Upload JSON File"
+2. Choose a file containing JSON hillchart data created using the `/hillchart` Cursor command
+3. Be amazed!
+
+
+### Method 2
 1. Open your Jira Epics in another window/tab.
 2. In the app:
    - Click “+ Add Epic”.
