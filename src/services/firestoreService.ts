@@ -9,6 +9,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { formatDateAsSnapshotId } from '../utils/dateUtils';
 
 export interface Project {
   id: string;
@@ -556,6 +557,46 @@ export async function getProjectData(projectId: string): Promise<ProjectData | n
 }
 
 /**
+ * Save project data as a snapshot in the snapshots subcollection
+ */
+export async function saveProjectSnapshot(projectId: string, data: ProjectData): Promise<string> {
+  try {
+    const now = new Date();
+    const snapshotId = formatDateAsSnapshotId(now);
+    const snapshotRef = doc(db, HILLCHARTS_COLLECTION, projectId, 'snapshots', snapshotId);
+    await setDoc(snapshotRef, {
+      ...data,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
+    return snapshotId;
+  } catch (error) {
+    console.error('Error saving project snapshot:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update an existing snapshot in the snapshots subcollection
+ */
+export async function updateProjectSnapshot(
+  projectId: string,
+  snapshotId: string,
+  data: ProjectData
+): Promise<void> {
+  try {
+    const snapshotRef = doc(db, HILLCHARTS_COLLECTION, projectId, 'snapshots', snapshotId);
+    await setDoc(snapshotRef, {
+      ...data,
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
+  } catch (error) {
+    console.error('Error updating project snapshot:', error);
+    throw error;
+  }
+}
+
+/**
  * Save project data to the hillcharts collection
  */
 export async function saveProjectData(projectId: string, data: ProjectData): Promise<void> {
@@ -567,6 +608,19 @@ export async function saveProjectData(projectId: string, data: ProjectData): Pro
     }, { merge: true });
   } catch (error) {
     console.error('Error saving project data:', error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a snapshot from a project's snapshots subcollection
+ */
+export async function deleteSnapshot(projectId: string, snapshotId: string): Promise<void> {
+  try {
+    const snapshotRef = doc(db, HILLCHARTS_COLLECTION, projectId, 'snapshots', snapshotId);
+    await deleteDoc(snapshotRef);
+  } catch (error) {
+    console.error('Error deleting snapshot:', error);
     throw error;
   }
 }

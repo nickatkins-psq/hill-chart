@@ -1,6 +1,8 @@
 // Theme-aware color utility functions
 // Returns appropriate colors based on current theme
 
+export type ThemeColors = ReturnType<typeof getThemeColors>;
+
 export const getThemeColors = (isDark: boolean) => {
   return {
     // Backgrounds

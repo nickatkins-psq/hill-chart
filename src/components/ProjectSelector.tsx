@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { getProjects, createProject, testFirestoreAccess, testSnapshotDiscovery, type Project } from '../services/firestoreService';
-import { useTheme } from '../hooks/useTheme';
 import { getThemeColors } from '../utils/themeColors';
 
 interface ProjectSelectorProps {
@@ -16,8 +15,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   onProjectCreated,
   onClear,
 }) => {
-  const { theme } = useTheme();
-  const colors = getThemeColors(theme === 'dark');
+  const colors = getThemeColors(false); // Always use light mode
   
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -83,7 +81,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   }
 
   return (
-    <div style={{ marginBottom: 24 }}>
+    <div style={{ marginBottom: 24, color: colors.textPrimary }}>
       {error && (
         <div style={{
           padding: '12px',
@@ -215,11 +213,6 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         </form>
       )}
 
-      {projects.length > 0 && !error && (
-        <div style={{ fontSize: 12, color: colors.textPrimary }}>
-          {projects.length} project{projects.length !== 1 ? 's' : ''} available
-        </div>
-      )}
       {projects.length === 0 && !isLoading && !error && (
         <div style={{ fontSize: 12, color: colors.textPrimary, fontStyle: 'italic' }}>
           No projects yet. Click "+ New Project" to create one.

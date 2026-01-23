@@ -10,27 +10,33 @@ import {
   getProjectData,
   getProjectSnapshotData,
   getProjectSnapshots,
-  saveProjectData,
+  saveProjectSnapshot,
+  updateProjectSnapshot,
+  deleteSnapshot,
   type Project,
   type ProjectData,
   type ProjectSnapshotMeta,
 } from "./services/firestoreService";
-import { useTheme } from "./hooks/useTheme";
 import { getThemeColors } from "./utils/themeColors";
+import {
+  formatDateForFilename,
+  normalizeDate,
+  parseSnapshotDate,
+} from "./utils/dateUtils";
+import {
+  convertScopesToEpics,
+  convertEpicsToScopes,
+  DEFAULT_EPICS,
+  getNextScopeNumber,
+  type Scope,
+} from "./utils/epicUtils";
+import {
+  getButtonStyles,
+  getInputStyles,
+  getNavButtonStyles,
+} from "./utils/uiStyles";
 
 const STORAGE_KEY = "hillChartEpics_v1";
-
-interface Scope {
-  id: number;
-  name: string;
-  progress: number;
-  direction: string;
-  status: string;
-  completed?: string[];
-  gaps?: string[];
-  blockers?: string[];
-  next_steps?: string[];
-}
 
 interface HillChartData {
   project: string;
@@ -41,72 +47,6 @@ interface HillChartData {
     percentage: number;
   };
   scopes: Scope[];
-}
-
-function convertScopesToEpics(scopes: Scope[]): EpicDot[] {
-  return scopes.map((scope) => ({
-    key: `SCOPE-${scope.id}`,
-    title: scope.name,
-    x: scope.progress,
-  }));
-}
-
-function convertEpicsToScopes(epics: EpicDot[], _projectName: string): Scope[] {
-  return epics.map((epic, index) => {
-    // Extract ID from key (e.g., "SCOPE-1" -> 1) or use index
-    const idMatch = epic.key.match(/SCOPE-(\d+)/);
-    const id = idMatch ? parseInt(idMatch[1], 10) : index + 1;
-    
-    return {
-      id,
-      name: epic.title,
-      progress: epic.x,
-      direction: computePhase(epic.x) === "UPHILL" ? "uphill" : 
-                 computePhase(epic.x) === "CREST" ? "crest" :
-                 computePhase(epic.x) === "DOWNHILL" ? "downhill" : "done",
-      status: epic.x >= 80 ? "done" : "in_progress",
-    };
-  });
-}
-
-function formatDateForFilename(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function formatDateForDisplay(date: Date): string {
-  // Use UTC methods to avoid timezone conversion issues
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth();
-  const day = date.getUTCDate();
-  
-  const monthNames = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"
-  ];
-  
-  return `${monthNames[month]} ${day}, ${year}`;
-}
-
-function parseSnapshotIdToDate(snapshotId: string): Date | null {
-  // Expected format: YYYY-MM-DD-HHMMSSZ (e.g., 2026-01-16-175406Z)
-  const match = snapshotId.match(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})Z$/);
-  if (!match) return null;
-  const year = parseInt(match[1], 10);
-  const month = parseInt(match[2], 10) - 1;
-  const day = parseInt(match[3], 10);
-  const hours = parseInt(match[4], 10);
-  const minutes = parseInt(match[5], 10);
-  const seconds = parseInt(match[6], 10);
-  const date = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
-  return isNaN(date.getTime()) ? null : date;
-}
-
-function normalizeDate(date: Date): string {
-  // Return a normalized string for date comparison (YYYY-MM-DD)
-  return formatDateForFilename(date);
 }
 
 async function loadHillChartData(date?: Date): Promise<HillChartData | null> {
@@ -141,13 +81,7 @@ function loadInitialEpics(): EpicDot[] {
       // ignore parse errors
     }
   }
-
-  // Seed with a few example Epics – replace with your real Jira keys/titles
-  return [
-    { key: "SCOPE-101", title: "Mobile onboarding revamp", x: 10 },
-    { key: "SCOPE-102", title: "Teacher messaging improvements", x: 35 },
-    { key: "SCOPE-103", title: "Notifications reliability", x: 65 },
-  ];
+  return DEFAULT_EPICS;
 }
 
 function phaseLabel(phase: HillPhase): string {
@@ -164,8 +98,7 @@ function phaseLabel(phase: HillPhase): string {
 }
 
 const App: React.FC = () => {
-  const { theme, toggleTheme } = useTheme();
-  const colors = getThemeColors(theme === 'dark');
+  const colors = getThemeColors(false); // Always use light mode
   
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
@@ -188,8 +121,25 @@ const App: React.FC = () => {
   const [editingField, setEditingField] = useState<string | null>(null);
   // Store temporary edit values
   const [editValue, setEditValue] = useState<string>("");
+  // Store original value when editing starts (for cancel/revert)
+  const [originalEditValue, setOriginalEditValue] = useState<string>("");
   // Track newly added scopes (to remove them if Escape is pressed)
   const [newlyAddedScopes, setNewlyAddedScopes] = useState<Set<string>>(new Set());
+  // Store original epic positions for reset functionality
+  const [originalEpics, setOriginalEpics] = useState<EpicDot[]>(() => loadInitialEpics());
+
+  // Helper function to set project data state
+  const setProjectDataState = (
+    epics: EpicDot[],
+    projectName: string | null,
+    date: Date | null
+  ) => {
+    setEpics(epics);
+    setOriginalEpics(epics);
+    setProjectName(projectName);
+    setCurrentDate(date);
+    setIsModified(false);
+  };
 
   // Load project data from Firestore when project is selected
   useEffect(() => {
@@ -199,6 +149,7 @@ const App: React.FC = () => {
         if (data && data.scopes.length > 0) {
           const convertedEpics = convertScopesToEpics(data.scopes);
           setEpics(convertedEpics);
+          setOriginalEpics(convertedEpics);
           setProjectName(data.project);
           // Try to parse date from generated field or filename
           if (data.generated) {
@@ -233,25 +184,14 @@ const App: React.FC = () => {
           const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
           if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
             const convertedEpics = convertScopesToEpics(snapshotData.scopes);
-            setEpics(convertedEpics);
-            setProjectName(snapshotData.project || currentProjectName || null);
-            // Always prioritize the snapshot ID date, as it contains the timestamp
-            const parsedSnapshotDate = parseSnapshotIdToDate(snapshot.id);
-            if (parsedSnapshotDate && !isNaN(parsedSnapshotDate.getTime())) {
-              setCurrentDate(parsedSnapshotDate);
-            } else {
-              // Fallback to generated field if snapshot ID doesn't contain date
-              const fallbackDate = snapshotData.generated ? new Date(snapshotData.generated) : null;
-              if (fallbackDate && !isNaN(fallbackDate.getTime())) {
-                setCurrentDate(fallbackDate);
-              } else {
-                setCurrentDate(null);
-              }
-            }
+            const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
+            setProjectDataState(
+              convertedEpics,
+              snapshotData.project || currentProjectName || null,
+              date
+            );
           } else {
-            setEpics([]);
-            setProjectName(currentProjectName || null);
-            setCurrentDate(null);
+            setProjectDataState([], currentProjectName || null, null);
           }
           setHasPreviousDay(lastIndex > 0);
           setHasNextDay(lastIndex < snapshots.length - 1);
@@ -260,22 +200,14 @@ const App: React.FC = () => {
           const data = await getProjectData(selectedProjectId);
           if (data && data.scopes && data.scopes.length > 0) {
             const convertedEpics = convertScopesToEpics(data.scopes);
-            setEpics(convertedEpics);
-            setProjectName(data.project);
-            if (data.generated) {
-              const parsedDate = new Date(data.generated);
-              if (!isNaN(parsedDate.getTime())) {
-                setCurrentDate(parsedDate);
-              } else {
-                setCurrentDate(null);
-              }
+            const date = data.generated ? new Date(data.generated) : null;
+            if (date && isNaN(date.getTime())) {
+              setProjectDataState(convertedEpics, data.project, null);
             } else {
-              setCurrentDate(null);
+              setProjectDataState(convertedEpics, data.project, date);
             }
           } else {
-            setEpics([]);
-            setProjectName(currentProjectName || null);
-            setCurrentDate(null);
+            setProjectDataState([], currentProjectName || null, null);
           }
           setHasPreviousDay(false);
           setHasNextDay(false);
@@ -348,10 +280,7 @@ const App: React.FC = () => {
 
       if (data && data.scopes.length > 0) {
         const convertedEpics = convertScopesToEpics(data.scopes);
-        setEpics(convertedEpics);
-        setProjectName(data.project);
-        setCurrentDate(date);
-        setIsModified(false); // Reset modification flag when loading data
+        setProjectDataState(convertedEpics, data.project, date);
       }
       // If no data found, silently fail - buttons will be disabled
     } catch (error) {
@@ -370,24 +299,14 @@ const App: React.FC = () => {
       const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
       if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
         const convertedEpics = convertScopesToEpics(snapshotData.scopes);
-        setEpics(convertedEpics);
-        setProjectName(snapshotData.project || selectedProjectName || projectName || null);
-        // Always prioritize the snapshot ID date, as it contains the timestamp
-        const parsedSnapshotDate = parseSnapshotIdToDate(snapshot.id);
-        if (parsedSnapshotDate && !isNaN(parsedSnapshotDate.getTime())) {
-          setCurrentDate(parsedSnapshotDate);
-        } else {
-          // Fallback to generated field if snapshot ID doesn't contain date
-          const fallbackDate = snapshotData.generated ? new Date(snapshotData.generated) : null;
-          if (fallbackDate && !isNaN(fallbackDate.getTime())) {
-            setCurrentDate(fallbackDate);
-          } else {
-            setCurrentDate(null);
-          }
-        }
+        const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
+        setProjectDataState(
+          convertedEpics,
+          snapshotData.project || selectedProjectName || projectName || null,
+          date
+        );
       }
       setCurrentSnapshotIndex(index);
-      setIsModified(false);
     } catch (error) {
       console.error("Error loading snapshot data:", error);
       setToast({
@@ -436,34 +355,38 @@ const App: React.FC = () => {
     setIsModified(true); // Mark as modified when dragging
   };
 
+  const handleReset = () => {
+    if (originalEpics.length === 0) return;
+    setEpics([...originalEpics]);
+    setIsModified(false);
+    setToast({
+      message: "Chart positions reset to original state",
+      type: 'info',
+    });
+  };
 
 
-  const handleRemoveEpic = (key: string) => {
+
+  const handleRemoveEpic = async (key: string) => {
     if (!window.confirm(`Remove ${key} from this hill?`)) return;
-    setEpics((prev) => prev.filter((e) => e.key !== key));
+    setEpics((prev) => {
+      const updated = prev.filter((e) => e.key !== key);
+      // Auto-save if editing an existing snapshot
+      if (selectedProjectId && currentSnapshotIndex !== null) {
+        setIsModified(true);
+        autoSaveTableEdits(updated);
+      }
+      return updated;
+    });
     setNewlyAddedScopes((prev) => {
       const next = new Set(prev);
       next.delete(key);
       return next;
     });
-    setIsModified(true);
   };
 
-  const handleAddScope = () => {
-    // Find the highest SCOPE-{number} in existing epics
-    let maxScopeNumber = 0;
-    epics.forEach((epic) => {
-      const match = epic.key.match(/^SCOPE-(\d+)$/);
-      if (match) {
-        const num = parseInt(match[1], 10);
-        if (num > maxScopeNumber) {
-          maxScopeNumber = num;
-        }
-      }
-    });
-    
-    // Use the next number
-    const newScopeNumber = maxScopeNumber + 1;
+  const handleAddScope = async () => {
+    const newScopeNumber = getNextScopeNumber(epics);
     const newKey = `SCOPE-${newScopeNumber}`;
     const newEpic: EpicDot = {
       key: newKey,
@@ -477,11 +400,18 @@ const App: React.FC = () => {
     // Start editing the title immediately
     setEditingField(`title-${newKey}`);
     setEditValue("New scope");
+    // Auto-save if editing an existing snapshot (will save after user edits the title)
+    // Don't save immediately since the title is just a placeholder
   };
 
   const handleStartEdit = (field: "key" | "title", epicKey: string, currentValue: string) => {
     setEditingField(`${field}-${epicKey}`);
     setEditValue(currentValue);
+    setOriginalEditValue(currentValue); // Store original value for cancel
+    // Mark as modified when starting to edit (if editing an existing snapshot)
+    if (selectedProjectId && currentSnapshotIndex !== null) {
+      setIsModified(true);
+    }
   };
 
   const handleSaveEdit = (field: "key" | "title", epicKey: string) => {
@@ -495,10 +425,17 @@ const App: React.FC = () => {
           next.delete(epicKey);
           return next;
         });
+        setIsModified(false); // Reset modification flag if removing newly added scope
       }
       setEditingField(null);
+      setEditValue("");
       return;
     }
+
+    // Get the original value to check if it changed
+    const epic = epics.find((e) => e.key === epicKey);
+    const originalValue = field === "key" ? epic?.key : epic?.title;
+    const hasChanged = originalValue !== trimmedValue;
 
     if (field === "key") {
       // Check if key already exists (and it's not the same epic)
@@ -523,9 +460,15 @@ const App: React.FC = () => {
         });
       }
     } else {
-      setEpics((prev) =>
-        prev.map((e) => (e.key === epicKey ? { ...e, title: trimmedValue } : e))
-      );
+      setEpics((prev) => {
+        const updated = prev.map((e) => (e.key === epicKey ? { ...e, title: trimmedValue } : e));
+        // Auto-save if editing an existing snapshot
+        if (hasChanged && selectedProjectId && currentSnapshotIndex !== null) {
+          setIsModified(true);
+          autoSaveTableEdits(updated);
+        }
+        return updated;
+      });
     }
     // Remove from newlyAddedScopes once saved (scope is no longer "new")
     setNewlyAddedScopes((prev) => {
@@ -533,8 +476,18 @@ const App: React.FC = () => {
       next.delete(epicKey);
       return next;
     });
-    setIsModified(true);
+    // Only set modified if the value actually changed (for key field)
+    if (field === "key" && hasChanged) {
+      setIsModified(true);
+      // Auto-save if editing an existing snapshot
+      if (selectedProjectId && currentSnapshotIndex !== null) {
+        // Get updated epics for key change
+        const updatedEpics = epics.map((e) => (e.key === epicKey ? { ...e, key: trimmedValue } : e));
+        autoSaveTableEdits(updatedEpics);
+      }
+    }
     setEditingField(null);
+    setEditValue("");
   };
 
   const handleCancelEdit = (epicKey?: string) => {
@@ -546,9 +499,36 @@ const App: React.FC = () => {
         next.delete(epicKey);
         return next;
       });
+      setIsModified(false); // Reset modification flag if removing newly added scope
+    } else if (epicKey && editingField) {
+      // If canceling an edit to an existing scope, revert to original value
+      const field = editingField.startsWith("key-") ? "key" : "title";
+      const epic = epics.find((e) => e.key === epicKey);
+      if (epic && originalEditValue !== editValue) {
+        // Only revert if the value actually changed
+        if (field === "key") {
+          setEpics((prev) =>
+            prev.map((e) => (e.key === epicKey ? { ...e, key: originalEditValue } : e))
+          );
+        } else {
+          setEpics((prev) =>
+            prev.map((e) => (e.key === epicKey ? { ...e, title: originalEditValue } : e))
+          );
+        }
+        // Check if we need to reset isModified (if no other changes exist)
+        const hasOtherChanges = epics.some((e) => {
+          if (e.key === epicKey) return false;
+          const orig = originalEpics.find((orig) => orig.key === e.key);
+          return !orig || orig.x !== e.x || orig.title !== e.title || orig.key !== e.key;
+        });
+        if (!hasOtherChanges) {
+          setIsModified(false);
+        }
+      }
     }
     setEditingField(null);
     setEditValue("");
+    setOriginalEditValue("");
   };
 
   const handleKeyPress = (e: React.KeyboardEvent, field: "key" | "title", epicKey: string) => {
@@ -584,17 +564,11 @@ const App: React.FC = () => {
       }
     }
     
-    // Reset to default placeholder epics (new user state)
-    const defaultEpics: EpicDot[] = [
-      { key: "SCOPE-101", title: "Mobile onboarding revamp", x: 10 },
-      { key: "SCOPE-102", title: "Teacher messaging improvements", x: 35 },
-      { key: "SCOPE-103", title: "Notifications reliability", x: 65 },
-    ];
-    
     // Reset all state to fresh state
     setSelectedProjectId(null);
     setSelectedProjectName(null);
-    setEpics(defaultEpics);
+    setEpics(DEFAULT_EPICS);
+    setOriginalEpics(DEFAULT_EPICS);
     setProjectName(null);
     setCurrentDate(null);
     setHasPreviousDay(false);
@@ -640,12 +614,24 @@ const App: React.FC = () => {
         scopes,
       };
 
-      await saveProjectData(selectedProjectId, projectData);
+      // Save as a snapshot with timestamp
+      const snapshotId = await saveProjectSnapshot(selectedProjectId, projectData);
+      const snapshotDate = parseSnapshotDate(snapshotId) || new Date();
+      
+      // Reload snapshots to include the new one
+      const updatedSnapshots = await getProjectSnapshots(selectedProjectId);
+      setProjectSnapshots(updatedSnapshots);
+      const newSnapshotIndex = updatedSnapshots.findIndex(s => s.id === snapshotId);
+      setCurrentSnapshotIndex(newSnapshotIndex >= 0 ? newSnapshotIndex : updatedSnapshots.length - 1);
+      
       setProjectName(projectData.project);
-      setCurrentDate(new Date());
+      setCurrentDate(snapshotDate);
+      setOriginalEpics(epics); // Update original positions after saving
       setIsModified(false); // Reset modification flag after saving
+      setHasPreviousDay(updatedSnapshots.length > 1);
+      setHasNextDay(false); // New snapshot is always the latest
       setToast({
-        message: "Project data saved successfully!",
+        message: "Snapshot saved successfully.",
         type: 'success',
       });
     } catch (error) {
@@ -656,6 +642,116 @@ const App: React.FC = () => {
       });
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const autoSaveTableEdits = async (epicsToSave?: EpicDot[]) => {
+    // Only auto-save if editing an existing snapshot
+    if (!selectedProjectId || currentSnapshotIndex === null || !projectSnapshots[currentSnapshotIndex]) {
+      return;
+    }
+
+    // Use provided epics or current state
+    const epicsToUse = epicsToSave || epics;
+
+    if (epicsToUse.length === 0) {
+      return; // Don't save empty state
+    }
+
+    // Don't show loading state for auto-save to avoid UI flicker
+    try {
+      const snapshot = projectSnapshots[currentSnapshotIndex];
+      const scopes = convertEpicsToScopes(epicsToUse, selectedProjectName || projectName || "Untitled Project");
+      const projectData: ProjectData = {
+        project: selectedProjectName || projectName || "Untitled Project",
+        generated: snapshot.generated || new Date().toISOString(),
+        task_completion: {
+          completed: epicsToUse.filter((e) => e.x >= 80).length,
+          total: epicsToUse.length,
+          percentage: epicsToUse.length > 0 
+            ? (epicsToUse.filter((e) => e.x >= 80).length / epicsToUse.length) * 100 
+            : 0,
+        },
+        scopes,
+      };
+
+      // Update the existing snapshot
+      await updateProjectSnapshot(selectedProjectId, snapshot.id, projectData);
+      
+      setOriginalEpics(epicsToUse); // Update original positions after saving
+      setIsModified(false); // Reset modification flag after saving
+    } catch (error) {
+      console.error("Error auto-saving table edits:", error);
+      setToast({
+        message: "Failed to save changes. Please try again.",
+        type: 'error',
+      });
+    }
+  };
+
+  const handleDeleteSnapshot = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    if (!selectedProjectId || currentSnapshotIndex === null || !projectSnapshots[currentSnapshotIndex]) {
+      console.warn("Cannot delete: missing project ID or snapshot index");
+      return;
+    }
+
+    const snapshot = projectSnapshots[currentSnapshotIndex];
+    const confirmed = window.confirm("Are you sure you want to delete this snapshot?");
+    if (!confirmed) {
+      console.log("Delete cancelled by user");
+      return;
+    }
+    
+    console.log("Deleting snapshot:", snapshot.id);
+
+    setIsLoading(true);
+    try {
+      await deleteSnapshot(selectedProjectId, snapshot.id);
+      
+      // Reload snapshots
+      const updatedSnapshots = await getProjectSnapshots(selectedProjectId);
+      setProjectSnapshots(updatedSnapshots);
+      
+      if (updatedSnapshots.length === 0) {
+        // No snapshots left, load root project data or show empty state
+        const data = await getProjectData(selectedProjectId);
+        if (data && data.scopes && data.scopes.length > 0) {
+          const convertedEpics = convertScopesToEpics(data.scopes);
+          const date = data.generated ? new Date(data.generated) : null;
+          if (date && isNaN(date.getTime())) {
+            setProjectDataState(convertedEpics, data.project, null);
+          } else {
+            setProjectDataState(convertedEpics, data.project, date);
+          }
+        } else {
+          setProjectDataState([], selectedProjectName || null, null);
+        }
+        setCurrentSnapshotIndex(null);
+        setHasPreviousDay(false);
+        setHasNextDay(false);
+      } else {
+        // Load the last snapshot (or the one before the deleted one)
+        const newIndex = Math.min(currentSnapshotIndex, updatedSnapshots.length - 1);
+        await loadSnapshotByIndex(newIndex);
+      }
+      
+      setToast({
+        message: "Snapshot deleted successfully.",
+        type: 'success',
+      });
+    } catch (error) {
+      console.error("Error deleting snapshot:", error);
+      setToast({
+        message: "Failed to delete snapshot. Please try again.",
+        type: 'error',
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -680,24 +776,18 @@ const App: React.FC = () => {
           color: colors.textPrimary,
         }}
       >
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-        <button
-          type="button"
-          onClick={toggleTheme}
-          style={{
-            padding: "6px 12px",
-            borderRadius: 4,
-            border: `1px solid ${colors.borderSecondary}`,
-            background: colors.buttonBg,
-            color: colors.buttonText,
-            fontSize: 13,
-            cursor: "pointer",
-          }}
-          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-        >
-          {theme === 'dark' ? '☀️' : '🌙'}
-        </button>
+      {/* Header with logo and title */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        <img 
+          src="https://img.icons8.com/?size=96&id=3IgibUo37hPA&format=png" 
+          alt="ParentSquare Logo" 
+          style={{ height: 32, width: 32 }}
+        />
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: colors.textPrimary }}>
+           ParentSquare Hill Charts
+        </h1>
       </div>
+      
       <ProjectSelector
         selectedProjectId={selectedProjectId}
         onProjectSelect={handleProjectSelect}
@@ -712,17 +802,7 @@ const App: React.FC = () => {
               type="button"
               onClick={handlePreviousDay}
               disabled={!hasPreviousDay || isLoading}
-              style={{
-                padding: "4px 8px",
-                borderRadius: 4,
-                border: `1px solid ${colors.borderTertiary}`,
-                background: hasPreviousDay && !isLoading ? colors.buttonBg : colors.buttonBgDisabled,
-                color: hasPreviousDay && !isLoading ? colors.buttonText : colors.buttonTextDisabled,
-                fontSize: 13,
-                cursor: hasPreviousDay && !isLoading ? "pointer" : "not-allowed",
-                fontWeight: "bold",
-                opacity: hasPreviousDay && !isLoading ? 1 : 0.6,
-              }}
+              style={getNavButtonStyles(colors, hasPreviousDay && !isLoading)}
             >
               ←
             </button>
@@ -730,41 +810,71 @@ const App: React.FC = () => {
               type="button"
               onClick={handleNextDay}
               disabled={!hasNextDay || isLoading}
-              style={{
-                padding: "4px 8px",
-                borderRadius: 4,
-                border: `1px solid ${colors.borderTertiary}`,
-                background: hasNextDay && !isLoading ? colors.buttonBg : colors.buttonBgDisabled,
-                color: hasNextDay && !isLoading ? colors.buttonText : colors.buttonTextDisabled,
-                fontSize: 13,
-                cursor: hasNextDay && !isLoading ? "pointer" : "not-allowed",
-                fontWeight: "bold",
-                opacity: hasNextDay && !isLoading ? 1 : 0.6,
-              }}
+              style={getNavButtonStyles(colors, hasNextDay && !isLoading)}
             >
               →
             </button>
           </div>
           <h2 style={{ margin: 0, color: colors.textPrimary }}>
-            {selectedProjectId && projectName ? `${projectName} - Hill Chart` : "Team Hill Chart"}
-            {currentDate && (
-              <span style={{ fontSize: 16, fontWeight: "normal", color: colors.textSecondary, marginLeft: 8 }}>
-                {formatDateForDisplay(currentDate)}
-              </span>
-            )}
+            {selectedProjectId && projectName ? projectName : "Team"}
           </h2>
         </div>
-        <div />
+        {selectedProjectId && currentSnapshotIndex !== null && !isModified && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleDeleteSnapshot}
+              disabled={isLoading}
+              style={getButtonStyles(colors, {
+                variant: "danger",
+                disabled: isLoading,
+                height: "32px",
+              })}
+            >
+              <span>Delete snapshot</span>
+            </button>
+          </div>
+        )}
+        {isModified && selectedProjectId && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={isLoading || originalEpics.length === 0}
+              style={getButtonStyles(colors, {
+                variant: "danger",
+                disabled: isLoading || originalEpics.length === 0,
+                height: "32px",
+              })}
+            >
+              <span>↺</span>
+              <span>Reset</span>
+            </button>
+            <button
+              key="save-button"
+              type="button"
+              onClick={handleSaveToFirestore}
+              disabled={isSaving || isLoading}
+              style={getButtonStyles(colors, {
+                variant: "info",
+                disabled: isSaving || isLoading,
+                height: "32px",
+              })}
+            >
+              <span>☁</span>
+              <span>{isSaving ? "Saving..." : "Save New Snapshot"}</span>
+            </button>
+          </div>
+        )}
       </div>
-      <p style={{ marginBottom: 16, color: colors.textSecondary }}>
-        Drag dots along the hill to reflect where each scope is. 
-        {selectedProjectId 
-          ? " Click 'Save' to save your changes." 
-          : " Positions are saved locally. Select a project to save."}
-      </p>
 
       <div style={{ backgroundColor: colors.bgPrimary }}>
-        <HillChart epics={epics} onUpdateEpicX={handleUpdateEpicX} />
+        <HillChart 
+          epics={epics} 
+          onUpdateEpicX={handleUpdateEpicX}
+          title={selectedProjectId && projectName ? projectName : "Team"}
+          date={currentDate}
+        />
       </div>
 
       <div style={{ marginTop: 24, display: "flex", gap: 24, alignItems: "flex-start" }}>
@@ -775,47 +885,14 @@ const App: React.FC = () => {
               type="button"
               onClick={handleAddScope}
               disabled={isLoading}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 4,
-                border: `1px solid ${colors.infoBg}`,
-                background: colors.infoBg,
-                color: "white",
-                fontSize: 13,
-                cursor: isLoading ? "not-allowed" : "pointer",
-                opacity: isLoading ? 0.6 : 1,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
+              style={getButtonStyles(colors, {
+                variant: "info",
+                disabled: isLoading,
+              })}
             >
               <span>+</span>
               <span>Add Scope</span>
             </button>
-            {isModified && selectedProjectId && (
-              <button
-                key="save-button"
-                type="button"
-                onClick={handleSaveToFirestore}
-                disabled={isSaving || isLoading}
-                style={{
-                  padding: "6px 12px",
-                  borderRadius: 4,
-                  border: "1px solid #22c55e",
-                  background: "#22c55e",
-                  color: "white",
-                  fontSize: 13,
-                  cursor: isSaving || isLoading ? "not-allowed" : "pointer",
-                  opacity: isSaving || isLoading ? 0.6 : 1,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <span>☁</span>
-                <span>{isSaving ? "Saving..." : "Save"}</span>
-              </button>
-            )}
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
@@ -855,7 +932,13 @@ const App: React.FC = () => {
                         <input
                           type="text"
                           value={editValue}
-                          onChange={(evt) => setEditValue(evt.target.value)}
+                          onChange={(evt) => {
+                            setEditValue(evt.target.value);
+                            // Mark as modified as soon as value changes
+                            if (selectedProjectId && currentSnapshotIndex !== null) {
+                              setIsModified(true);
+                            }
+                          }}
                           onBlur={() => {
                             // Only save if not empty, otherwise handleCancelEdit will remove newly added scopes
                             if (editValue.trim()) {
@@ -866,15 +949,7 @@ const App: React.FC = () => {
                           }}
                           onKeyDown={(evt) => handleKeyPress(evt, "key", e.key)}
                           autoFocus
-                          style={{
-                            width: "100%",
-                            padding: "2px 4px",
-                            fontSize: 13,
-                            border: `1px solid ${colors.borderPrimary}`,
-                            borderRadius: 2,
-                            backgroundColor: colors.inputBg,
-                            color: colors.inputText,
-                          }}
+                          style={getInputStyles(colors)}
                         />
                       ) : (
                         <span style={{ textDecoration: "underline", textDecorationStyle: "dotted" }}>
@@ -895,7 +970,13 @@ const App: React.FC = () => {
                         <input
                           type="text"
                           value={editValue}
-                          onChange={(evt) => setEditValue(evt.target.value)}
+                          onChange={(evt) => {
+                            setEditValue(evt.target.value);
+                            // Mark as modified as soon as value changes
+                            if (selectedProjectId && currentSnapshotIndex !== null) {
+                              setIsModified(true);
+                            }
+                          }}
                           onBlur={() => {
                             // Only save if not empty, otherwise handleCancelEdit will remove newly added scopes
                             if (editValue.trim()) {
@@ -906,15 +987,7 @@ const App: React.FC = () => {
                           }}
                           onKeyDown={(evt) => handleKeyPress(evt, "title", e.key)}
                           autoFocus
-                          style={{
-                            width: "100%",
-                            padding: "2px 4px",
-                            fontSize: 13,
-                            border: `1px solid ${colors.borderPrimary}`,
-                            borderRadius: 2,
-                            backgroundColor: colors.inputBg,
-                            color: colors.inputText,
-                          }}
+                          style={getInputStyles(colors)}
                         />
                       ) : (
                         <span style={{ textDecoration: "underline", textDecorationStyle: "dotted" }}>
@@ -931,7 +1004,7 @@ const App: React.FC = () => {
                         style={{
                           border: "none",
                           background: "transparent",
-                          color: "#ef4444",
+                          color: colors.errorText,
                           cursor: "pointer",
                         }}
                       >
