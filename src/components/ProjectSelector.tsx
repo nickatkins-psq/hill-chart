@@ -198,12 +198,12 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       )}
 
       {projects.length > 0 && !error && (
-        <div style={{ fontSize: 12, color: colors.textSecondary }}>
+        <div style={{ fontSize: 12, color: colors.textPrimary }}>
           {projects.length} project{projects.length !== 1 ? 's' : ''} available
         </div>
       )}
       {projects.length === 0 && !isLoading && !error && (
-        <div style={{ fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' }}>
+        <div style={{ fontSize: 12, color: colors.textPrimary, fontStyle: 'italic' }}>
           No projects yet. Click "+ New Project" to create one.
         </div>
       )}
