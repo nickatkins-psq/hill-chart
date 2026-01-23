@@ -138,9 +138,9 @@ function loadInitialEpics(): EpicDot[] {
 
   // Seed with a few example Epics – replace with your real Jira keys/titles
   return [
-    { key: "MOB-101", title: "Mobile onboarding revamp", x: 10 },
-    { key: "WEB-202", title: "Teacher messaging improvements", x: 35 },
-    { key: "INFRA-303", title: "Notifications reliability", x: 65 },
+    { key: "SCOPE-101", title: "Mobile onboarding revamp", x: 10 },
+    { key: "SCOPE-102", title: "Teacher messaging improvements", x: 35 },
+    { key: "SCOPE-103", title: "Notifications reliability", x: 65 },
   ];
 }
 
@@ -178,8 +178,12 @@ const App: React.FC = () => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   // Track if chart has been modified by dragging
   const [isModified, setIsModified] = useState(false);
-  // Store original epics positions for restore functionality
-  const [originalEpics, setOriginalEpics] = useState<EpicDot[]>(() => loadInitialEpics());
+  // Track which epic field is being edited (format: "key-{epicKey}" or "title-{epicKey}")
+  const [editingField, setEditingField] = useState<string | null>(null);
+  // Store temporary edit values
+  const [editValue, setEditValue] = useState<string>("");
+  // Track newly added scopes (to remove them if Escape is pressed)
+  const [newlyAddedScopes, setNewlyAddedScopes] = useState<Set<string>>(new Set());
 
   // Load project data from Firestore when project is selected
   useEffect(() => {
@@ -189,7 +193,6 @@ const App: React.FC = () => {
         if (data && data.scopes.length > 0) {
           const convertedEpics = convertScopesToEpics(data.scopes);
           setEpics(convertedEpics);
-          setOriginalEpics(convertedEpics); // Store original positions
           setProjectName(data.project);
           // Try to parse date from generated field or filename
           if (data.generated) {
@@ -219,7 +222,6 @@ const App: React.FC = () => {
           if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
             const convertedEpics = convertScopesToEpics(snapshotData.scopes);
             setEpics(convertedEpics);
-            setOriginalEpics(convertedEpics);
             setProjectName(snapshotData.project || currentProjectName || null);
             const parsedSnapshotDate =
               parseSnapshotIdToDate(snapshot.id) ||
@@ -231,7 +233,6 @@ const App: React.FC = () => {
             }
           } else {
             setEpics([]);
-            setOriginalEpics([]);
             setProjectName(currentProjectName || null);
             setCurrentDate(null);
           }
@@ -243,7 +244,6 @@ const App: React.FC = () => {
           if (data && data.scopes && data.scopes.length > 0) {
             const convertedEpics = convertScopesToEpics(data.scopes);
             setEpics(convertedEpics);
-            setOriginalEpics(convertedEpics);
             setProjectName(data.project);
             if (data.generated) {
               const parsedDate = new Date(data.generated);
@@ -253,7 +253,6 @@ const App: React.FC = () => {
             }
           } else {
             setEpics([]);
-            setOriginalEpics([]);
             setProjectName(currentProjectName || null);
             setCurrentDate(null);
           }
@@ -329,7 +328,6 @@ const App: React.FC = () => {
       if (data && data.scopes.length > 0) {
         const convertedEpics = convertScopesToEpics(data.scopes);
         setEpics(convertedEpics);
-        setOriginalEpics(convertedEpics); // Store original positions
         setProjectName(data.project);
         setCurrentDate(date);
         setIsModified(false); // Reset modification flag when loading data
@@ -352,7 +350,6 @@ const App: React.FC = () => {
       if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
         const convertedEpics = convertScopesToEpics(snapshotData.scopes);
         setEpics(convertedEpics);
-        setOriginalEpics(convertedEpics);
         setProjectName(snapshotData.project || selectedProjectName || projectName || null);
         const parsedSnapshotDate =
           parseSnapshotIdToDate(snapshot.id) ||
@@ -411,20 +408,127 @@ const App: React.FC = () => {
     setIsModified(true); // Mark as modified when dragging
   };
 
-  const handleRestore = () => {
-    if (originalEpics.length === 0) return;
-    setEpics([...originalEpics]); // Restore to original positions
-    setIsModified(false); // Reset modification flag
-    setToast({
-      message: "Positions restored to original state",
-      type: 'info',
-    });
-  };
 
 
   const handleRemoveEpic = (key: string) => {
     if (!window.confirm(`Remove ${key} from this hill?`)) return;
     setEpics((prev) => prev.filter((e) => e.key !== key));
+    setNewlyAddedScopes((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    setIsModified(true);
+  };
+
+  const handleAddScope = () => {
+    // Find the highest SCOPE-{number} in existing epics
+    let maxScopeNumber = 0;
+    epics.forEach((epic) => {
+      const match = epic.key.match(/^SCOPE-(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxScopeNumber) {
+          maxScopeNumber = num;
+        }
+      }
+    });
+    
+    // Use the next number
+    const newScopeNumber = maxScopeNumber + 1;
+    const newKey = `SCOPE-${newScopeNumber}`;
+    const newEpic: EpicDot = {
+      key: newKey,
+      title: "New scope",
+      x: 10, // Default to uphill position
+    };
+    setEpics((prev) => [...prev, newEpic]);
+    setIsModified(true);
+    // Track this as a newly added scope
+    setNewlyAddedScopes((prev) => new Set(prev).add(newKey));
+    // Start editing the title immediately
+    setEditingField(`title-${newKey}`);
+    setEditValue("New scope");
+  };
+
+  const handleStartEdit = (field: "key" | "title", epicKey: string, currentValue: string) => {
+    setEditingField(`${field}-${epicKey}`);
+    setEditValue(currentValue);
+  };
+
+  const handleSaveEdit = (field: "key" | "title", epicKey: string) => {
+    const trimmedValue = editValue.trim();
+    if (!trimmedValue) {
+      // If it's a newly added scope with empty value, remove it
+      if (newlyAddedScopes.has(epicKey)) {
+        setEpics((prev) => prev.filter((e) => e.key !== epicKey));
+        setNewlyAddedScopes((prev) => {
+          const next = new Set(prev);
+          next.delete(epicKey);
+          return next;
+        });
+      }
+      setEditingField(null);
+      return;
+    }
+
+    if (field === "key") {
+      // Check if key already exists (and it's not the same epic)
+      const keyExists = epics.some((e) => e.key === trimmedValue && e.key !== epicKey);
+      if (keyExists) {
+        setToast({
+          message: `Key "${trimmedValue}" already exists. Please use a unique key.`,
+          type: "error",
+        });
+        return;
+      }
+      setEpics((prev) =>
+        prev.map((e) => (e.key === epicKey ? { ...e, key: trimmedValue } : e))
+      );
+      // Update newlyAddedScopes if key changed
+      if (newlyAddedScopes.has(epicKey)) {
+        setNewlyAddedScopes((prev) => {
+          const next = new Set(prev);
+          next.delete(epicKey);
+          next.add(trimmedValue);
+          return next;
+        });
+      }
+    } else {
+      setEpics((prev) =>
+        prev.map((e) => (e.key === epicKey ? { ...e, title: trimmedValue } : e))
+      );
+    }
+    // Remove from newlyAddedScopes once saved (scope is no longer "new")
+    setNewlyAddedScopes((prev) => {
+      const next = new Set(prev);
+      next.delete(epicKey);
+      return next;
+    });
+    setIsModified(true);
+    setEditingField(null);
+  };
+
+  const handleCancelEdit = (epicKey?: string) => {
+    // If Escape is pressed on a newly added scope, remove it
+    if (epicKey && newlyAddedScopes.has(epicKey)) {
+      setEpics((prev) => prev.filter((e) => e.key !== epicKey));
+      setNewlyAddedScopes((prev) => {
+        const next = new Set(prev);
+        next.delete(epicKey);
+        return next;
+      });
+    }
+    setEditingField(null);
+    setEditValue("");
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent, field: "key" | "title", epicKey: string) => {
+    if (e.key === "Enter") {
+      handleSaveEdit(field, epicKey);
+    } else if (e.key === "Escape") {
+      handleCancelEdit(epicKey);
+    }
   };
 
   const handleProjectSelect = (projectId: string | null) => {
@@ -478,7 +582,6 @@ const App: React.FC = () => {
       await saveProjectData(selectedProjectId, projectData);
       setProjectName(projectData.project);
       setCurrentDate(new Date());
-      setOriginalEpics(epics); // Update original positions after saving
       setIsModified(false); // Reset modification flag after saving
       setToast({
         message: "Project data saved successfully!",
@@ -581,7 +684,7 @@ const App: React.FC = () => {
             </button>
           </div>
           <h2 style={{ margin: 0, color: colors.textPrimary }}>
-            {selectedProjectId && projectName ? `${projectName} - Hill Chart` : "Team Hill Chart (local prototype)"}
+            {selectedProjectId && projectName ? `${projectName} - Hill Chart` : "Team Hill Chart"}
             {currentDate && (
               <span style={{ fontSize: 16, fontWeight: "normal", color: colors.textSecondary, marginLeft: 8 }}>
                 {formatDateForDisplay(currentDate)}
@@ -606,54 +709,50 @@ const App: React.FC = () => {
         <div style={{ flex: 2 }}>
           <h3 style={{ marginBottom: 8, color: colors.textPrimary }}>Scopes on this hill</h3>
           <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-            {isModified && (
-              <>
-                <button
-                  type="button"
-                  onClick={handleRestore}
-                  disabled={isLoading || originalEpics.length === 0}
-                  style={{
-                    padding: "6px 12px",
-                    borderRadius: 4,
-                    border: "1px solid #f59e0b",
-                    background: "#f59e0b",
-                    color: "white",
-                    fontSize: 13,
-                    cursor: isLoading || originalEpics.length === 0 ? "not-allowed" : "pointer",
-                    opacity: isLoading || originalEpics.length === 0 ? 0.6 : 1,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  <span>↺</span>
-                  <span>Restore</span>
-                </button>
-                {selectedProjectId && (
-                  <button
-                    key="save-button"
-                    type="button"
-                    onClick={handleSaveToFirestore}
-                    disabled={isSaving || isLoading}
-                    style={{
-                      padding: "6px 12px",
-                      borderRadius: 4,
-                      border: "1px solid #22c55e",
-                      background: "#22c55e",
-                      color: "white",
-                      fontSize: 13,
-                      cursor: isSaving || isLoading ? "not-allowed" : "pointer",
-                      opacity: isSaving || isLoading ? 0.6 : 1,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
-                  >
-                    <span>⌄</span>
-                    <span>{isSaving ? "Saving..." : "Save to Firestore"}</span>
-                  </button>
-                )}
-              </>
+            <button
+              type="button"
+              onClick={handleAddScope}
+              disabled={isLoading}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 4,
+                border: `1px solid ${colors.infoBg}`,
+                background: colors.infoBg,
+                color: "white",
+                fontSize: 13,
+                cursor: isLoading ? "not-allowed" : "pointer",
+                opacity: isLoading ? 0.6 : 1,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span>+</span>
+              <span>Add Scope</span>
+            </button>
+            {isModified && selectedProjectId && (
+              <button
+                key="save-button"
+                type="button"
+                onClick={handleSaveToFirestore}
+                disabled={isSaving || isLoading}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 4,
+                  border: "1px solid #22c55e",
+                  background: "#22c55e",
+                  color: "white",
+                  fontSize: 13,
+                  cursor: isSaving || isLoading ? "not-allowed" : "pointer",
+                  opacity: isSaving || isLoading ? 0.6 : 1,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span>⌄</span>
+                <span>{isSaving ? "Saving..." : "Save to Firestore"}</span>
+              </button>
             )}
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -677,10 +776,90 @@ const App: React.FC = () => {
             <tbody>
               {epics.map((e) => {
                 const phase = computePhase(e.x);
+                const isEditingKey = editingField === `key-${e.key}`;
+                const isEditingTitle = editingField === `title-${e.key}`;
                 return (
                   <tr key={e.key}>
-                    <td style={{ padding: 4, color: colors.textPrimary }}>{e.key}</td>
-                    <td style={{ padding: 4, color: colors.textPrimary }}>{e.title}</td>
+                    <td
+                      style={{
+                        padding: 4,
+                        color: colors.textPrimary,
+                        cursor: "pointer",
+                      }}
+                      onClick={() => !isEditingKey && handleStartEdit("key", e.key, e.key)}
+                      onDoubleClick={() => handleStartEdit("key", e.key, e.key)}
+                    >
+                      {isEditingKey ? (
+                        <input
+                          type="text"
+                          value={editValue}
+                          onChange={(evt) => setEditValue(evt.target.value)}
+                          onBlur={() => {
+                            // Only save if not empty, otherwise handleCancelEdit will remove newly added scopes
+                            if (editValue.trim()) {
+                              handleSaveEdit("key", e.key);
+                            } else {
+                              handleCancelEdit(e.key);
+                            }
+                          }}
+                          onKeyDown={(evt) => handleKeyPress(evt, "key", e.key)}
+                          autoFocus
+                          style={{
+                            width: "100%",
+                            padding: "2px 4px",
+                            fontSize: 13,
+                            border: `1px solid ${colors.borderPrimary}`,
+                            borderRadius: 2,
+                            backgroundColor: colors.inputBg,
+                            color: colors.inputText,
+                          }}
+                        />
+                      ) : (
+                        <span style={{ textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                          {e.key}
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      style={{
+                        padding: 4,
+                        color: colors.textPrimary,
+                        cursor: "pointer",
+                      }}
+                      onClick={() => !isEditingTitle && handleStartEdit("title", e.key, e.title)}
+                      onDoubleClick={() => handleStartEdit("title", e.key, e.title)}
+                    >
+                      {isEditingTitle ? (
+                        <input
+                          type="text"
+                          value={editValue}
+                          onChange={(evt) => setEditValue(evt.target.value)}
+                          onBlur={() => {
+                            // Only save if not empty, otherwise handleCancelEdit will remove newly added scopes
+                            if (editValue.trim()) {
+                              handleSaveEdit("title", e.key);
+                            } else {
+                              handleCancelEdit(e.key);
+                            }
+                          }}
+                          onKeyDown={(evt) => handleKeyPress(evt, "title", e.key)}
+                          autoFocus
+                          style={{
+                            width: "100%",
+                            padding: "2px 4px",
+                            fontSize: 13,
+                            border: `1px solid ${colors.borderPrimary}`,
+                            borderRadius: 2,
+                            backgroundColor: colors.inputBg,
+                            color: colors.inputText,
+                          }}
+                        />
+                      ) : (
+                        <span style={{ textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                          {e.title}
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: 4, color: colors.textPrimary }}>{e.x.toFixed(0)}%</td>
                     <td style={{ padding: 4, color: colors.textPrimary }}>{phaseLabel(phase)}</td>
                     <td style={{ padding: 4 }}>
@@ -703,7 +882,7 @@ const App: React.FC = () => {
               {epics.length === 0 && (
                 <tr>
                   <td colSpan={5} style={{ padding: 8, color: colors.textSecondary }}>
-                    No scopes yet.
+                    No scopes yet. Click "Add Scope" to create one.
                   </td>
                 </tr>
               )}
