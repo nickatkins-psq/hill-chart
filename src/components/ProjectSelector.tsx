@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { getProjects, createProject, deleteProject, type Project } from '../services/firestoreService';
+import { getProjects, createProject, type Project } from '../services/firestoreService';
 
 interface ProjectSelectorProps {
   selectedProjectId: string | null;
@@ -55,23 +55,6 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       alert('Failed to create project. Please try again.');
     } finally {
       setIsCreating(false);
-    }
-  };
-
-  const handleDeleteProject = async (projectId: string, projectName: string) => {
-    if (!window.confirm(`Are you sure you want to delete "${projectName}"? This will delete all associated data.`)) {
-      return;
-    }
-
-    try {
-      await deleteProject(projectId);
-      setProjects((prev) => prev.filter((p) => p.id !== projectId));
-      if (selectedProjectId === projectId) {
-        onProjectSelect(null);
-      }
-    } catch (error) {
-      console.error('Error deleting project:', error);
-      alert('Failed to delete project. Please try again.');
     }
   };
 
