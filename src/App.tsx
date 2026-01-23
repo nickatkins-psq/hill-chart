@@ -37,6 +37,7 @@ import {
 } from "./utils/uiStyles";
 
 const STORAGE_KEY = "hillChartEpics_v1";
+const SELECTED_PROJECT_KEY = "hillChartSelectedProject_v1";
 
 interface HillChartData {
   project: string;
@@ -84,6 +85,18 @@ function loadInitialEpics(): EpicDot[] {
   return DEFAULT_EPICS;
 }
 
+function loadSelectedProjectId(): string | null {
+  if (typeof window !== "undefined") {
+    try {
+      const projectId = window.localStorage.getItem(SELECTED_PROJECT_KEY);
+      return projectId || null;
+    } catch {
+      // ignore parse errors
+    }
+  }
+  return null;
+}
+
 function phaseLabel(phase: HillPhase): string {
   switch (phase) {
     case "UPHILL":
@@ -100,7 +113,7 @@ function phaseLabel(phase: HillPhase): string {
 const App: React.FC = () => {
   const colors = getThemeColors(false); // Always use light mode
   
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => loadSelectedProjectId());
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [epics, setEpics] = useState<EpicDot[]>(() => loadInitialEpics());
   const [projectName, setProjectName] = useState<string | null>(null);
@@ -541,6 +554,18 @@ const App: React.FC = () => {
 
   const handleProjectSelect = (projectId: string | null) => {
     setSelectedProjectId(projectId);
+    // Save selected project to localStorage
+    if (typeof window !== "undefined") {
+      try {
+        if (projectId) {
+          window.localStorage.setItem(SELECTED_PROJECT_KEY, projectId);
+        } else {
+          window.localStorage.removeItem(SELECTED_PROJECT_KEY);
+        }
+      } catch {
+        // ignore write errors
+      }
+    }
     if (!projectId) {
       setProjectSnapshots([]);
       setCurrentSnapshotIndex(null);
@@ -552,6 +577,14 @@ const App: React.FC = () => {
   const handleProjectCreated = (project: Project) => {
     setSelectedProjectName(project.name);
     setSelectedProjectId(project.id);
+    // Save selected project to localStorage
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(SELECTED_PROJECT_KEY, project.id);
+      } catch {
+        // ignore write errors
+      }
+    }
   };
 
   const handleClear = () => {
@@ -559,6 +592,7 @@ const App: React.FC = () => {
     if (typeof window !== "undefined") {
       try {
         window.localStorage.removeItem(STORAGE_KEY);
+        window.localStorage.removeItem(SELECTED_PROJECT_KEY);
       } catch {
         // ignore errors
       }
@@ -793,6 +827,8 @@ const App: React.FC = () => {
         onProjectSelect={handleProjectSelect}
         onProjectCreated={handleProjectCreated}
         onClear={handleClear}
+        isModified={isModified}
+        onSaveBeforeClear={selectedProjectId ? handleSaveToFirestore : undefined}
       />
       
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>

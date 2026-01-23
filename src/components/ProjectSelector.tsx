@@ -7,6 +7,8 @@ interface ProjectSelectorProps {
   onProjectSelect: (projectId: string | null) => void;
   onProjectCreated: (project: Project) => void;
   onClear: () => void;
+  isModified?: boolean;
+  onSaveBeforeClear?: () => Promise<void>;
 }
 
 const ProjectSelector: React.FC<ProjectSelectorProps> = ({
@@ -14,6 +16,8 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   onProjectSelect,
   onProjectCreated,
   onClear,
+  isModified = false,
+  onSaveBeforeClear,
 }) => {
   const colors = getThemeColors(false); // Always use light mode
   
@@ -128,7 +132,15 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         </select>
         <button
           type="button"
-          onClick={onClear}
+          onClick={async () => {
+            if (isModified && onSaveBeforeClear) {
+              const shouldSave = window.confirm("Save changes?");
+              if (shouldSave) {
+                await onSaveBeforeClear();
+              }
+            }
+            onClear();
+          }}
           disabled={isLoading}
           style={{
             padding: '6px 12px',
@@ -141,7 +153,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             opacity: isLoading ? 0.6 : 1,
           }}
         >
-          Reset
+          New Project
         </button>
       </div>
 
