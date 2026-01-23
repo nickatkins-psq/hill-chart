@@ -76,17 +76,9 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     }
   };
 
-  if (isLoading) {
-    return (
-      <div style={{ padding: '12px', color: colors.textPrimary }}>
-        Loading projects...
-      </div>
-    );
-  }
-
   return (
     <div style={{ marginBottom: 24, color: colors.textPrimary }}>
-      {error && (
+      {error && !isLoading && (
         <div style={{
           padding: '12px',
           marginBottom: 12,
@@ -104,7 +96,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           Project:
         </label>
         <select
-          value={selectedProjectId || ''}
+          value={isLoading ? '' : (selectedProjectId || '')}
           onChange={(e) => {
             const value = e.target.value;
             onProjectSelect(value || null);
@@ -118,18 +110,64 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             minWidth: 200,
             backgroundColor: isLoading || error ? colors.bgTertiary : colors.selectBg,
             cursor: isLoading || error ? 'not-allowed' : 'pointer',
-            color: selectedProjectId ? colors.selectText : colors.selectTextPlaceholder,
+            color: isLoading ? colors.selectTextPlaceholder : (selectedProjectId ? colors.selectText : colors.selectTextPlaceholder),
           }}
         >
-          <option value="" disabled hidden>
-            Select a project...
-          </option>
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
+          {isLoading ? (
+            <option value="" disabled>
+              Loading...
             </option>
-          ))}
+          ) : (
+            <>
+              <option value="" disabled hidden>
+                Select a project...
+              </option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </>
+          )}
         </select>
+        <button
+          type="button"
+          onClick={loadProjects}
+          disabled={isLoading}
+          title="Refresh project list"
+          style={{
+            padding: '6px 8px',
+            borderRadius: 4,
+            border: `1px solid ${colors.borderSecondary}`,
+            background: colors.buttonBg,
+            color: colors.buttonText,
+            fontSize: 14,
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            opacity: isLoading ? 0.6 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{
+              animation: isLoading ? 'spin 1s linear infinite' : 'none',
+            }}
+          >
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+            <path d="M21 21v-5h-5" />
+          </svg>
+        </button>
         <button
           type="button"
           onClick={async () => {
