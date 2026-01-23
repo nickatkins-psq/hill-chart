@@ -167,6 +167,10 @@ const App: React.FC = () => {
   const [uploadedFiles, setUploadedFiles] = useState<Map<string, HillChartData>>(new Map());
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  // Track if chart has been modified by dragging
+  const [isModified, setIsModified] = useState(false);
+  // Store original epics positions for restore functionality
+  const [originalEpics, setOriginalEpics] = useState<EpicDot[]>(() => loadInitialEpics());
 
   // Load project data from Firestore when project is selected
   useEffect(() => {
@@ -176,6 +180,7 @@ const App: React.FC = () => {
         if (data && data.scopes.length > 0) {
           const convertedEpics = convertScopesToEpics(data.scopes);
           setEpics(convertedEpics);
+          setOriginalEpics(convertedEpics); // Store original positions
           setProjectName(data.project);
           // Try to parse date from generated field or filename
           if (data.generated) {
@@ -185,6 +190,7 @@ const App: React.FC = () => {
             }
           }
         }
+        setIsModified(false); // Reset modification flag when loading data
       });
       return;
     }
@@ -197,6 +203,7 @@ const App: React.FC = () => {
         if (data && data.scopes && data.scopes.length > 0) {
           const convertedEpics = convertScopesToEpics(data.scopes);
           setEpics(convertedEpics);
+          setOriginalEpics(convertedEpics); // Store original positions
           setProjectName(data.project);
           if (data.generated) {
             const parsedDate = new Date(data.generated);
@@ -207,9 +214,11 @@ const App: React.FC = () => {
         } else {
           // New project - start with empty epics
           setEpics([]);
+          setOriginalEpics([]);
           setProjectName(currentProjectName || null);
           setCurrentDate(null);
         }
+        setIsModified(false); // Reset modification flag when loading data
       })
       .catch((error) => {
         console.error("Error loading project data:", error);
@@ -270,8 +279,10 @@ const App: React.FC = () => {
       if (data && data.scopes.length > 0) {
         const convertedEpics = convertScopesToEpics(data.scopes);
         setEpics(convertedEpics);
+        setOriginalEpics(convertedEpics); // Store original positions
         setProjectName(data.project);
         setCurrentDate(date);
+        setIsModified(false); // Reset modification flag when loading data
       }
       // If no data found, silently fail - buttons will be disabled
     } catch (error) {
@@ -306,6 +317,17 @@ const App: React.FC = () => {
 
   const handleUpdateEpicX = (key: string, x: number) => {
     setEpics((prev) => prev.map((e) => (e.key === key ? { ...e, x } : e)));
+    setIsModified(true); // Mark as modified when dragging
+  };
+
+  const handleRestore = () => {
+    if (originalEpics.length === 0) return;
+    setEpics([...originalEpics]); // Restore to original positions
+    setIsModified(false); // Reset modification flag
+    setToast({
+      message: "Positions restored to original state",
+      type: 'info',
+    });
   };
 
   const handleAddEpic = () => {
@@ -365,6 +387,8 @@ const App: React.FC = () => {
       await saveProjectData(selectedProjectId, projectData);
       setProjectName(projectData.project);
       setCurrentDate(new Date());
+      setOriginalEpics(epics); // Update original positions after saving
+      setIsModified(false); // Reset modification flag after saving
       setToast({
         message: "Project data saved successfully!",
         type: 'success',
@@ -395,7 +419,7 @@ const App: React.FC = () => {
     setIsLoading(true);
     const reader = new FileReader();
 
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const text = e.target?.result as string;
         const data = JSON.parse(text) as HillChartData;
@@ -431,17 +455,52 @@ const App: React.FC = () => {
 
         const convertedEpics = convertScopesToEpics(data.scopes);
         setEpics(convertedEpics);
+        setOriginalEpics(convertedEpics); // Store original positions
         setProjectName(data.project || null);
         
         if (parsedDate) {
           setCurrentDate(parsedDate);
         }
 
-        // Show toast notification
-        setToast({
-          message: `Imported ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""}`,
-          type: 'success',
-        });
+        // Auto-save to Firestore if project is selected
+        if (selectedProjectId) {
+          try {
+            const scopes = convertEpicsToScopes(convertedEpics, data.project || selectedProjectName || "Untitled Project");
+            const projectData: ProjectData = {
+              project: data.project || selectedProjectName || "Untitled Project",
+              generated: new Date().toISOString(),
+              task_completion: {
+                completed: convertedEpics.filter((e) => e.x >= 80).length,
+                total: convertedEpics.length,
+                percentage: convertedEpics.length > 0 
+                  ? (convertedEpics.filter((e) => e.x >= 80).length / convertedEpics.length) * 100 
+                  : 0,
+              },
+              scopes,
+            };
+            await saveProjectData(selectedProjectId, projectData);
+            setProjectName(projectData.project);
+            setCurrentDate(new Date());
+            setOriginalEpics(convertedEpics); // Update original positions after auto-saving
+            setIsModified(false); // Reset modification flag after auto-saving
+            setToast({
+              message: `Imported and saved ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""}`,
+              type: 'success',
+            });
+          } catch (error) {
+            console.error("Error auto-saving project data:", error);
+            setToast({
+              message: `Imported ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""} (save failed)`,
+              type: 'success',
+            });
+          }
+        } else {
+          // Show toast notification (no auto-save if no project selected)
+          setToast({
+            message: `Imported ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""}`,
+            type: 'success',
+          });
+        }
       } catch (error) {
         setToast({
           message: `Error parsing JSON file: ${error instanceof Error ? error.message : String(error)}`,
@@ -539,51 +598,7 @@ const App: React.FC = () => {
             )}
           </h2>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {selectedProjectId && (
-            <button
-              type="button"
-              onClick={handleSaveToFirestore}
-              disabled={isSaving || isLoading}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 4,
-                border: "1px solid #22c55e",
-                background: "#22c55e",
-                color: "white",
-                fontSize: 13,
-                cursor: isSaving || isLoading ? "not-allowed" : "pointer",
-                opacity: isSaving || isLoading ? 0.6 : 1,
-              }}
-            >
-              {isSaving ? "Saving..." : "Save to Firestore"}
-            </button>
-          )}
-          <input
-            type="file"
-            accept=".json"
-            onChange={handleFileUpload}
-            disabled={isLoading}
-            id="json-file-input"
-            style={{ display: "none" }}
-          />
-          <label
-            htmlFor="json-file-input"
-            style={{
-              padding: "6px 12px",
-              borderRadius: 4,
-              border: "1px solid #4b6fff",
-              background: "#4b6fff",
-              color: "white",
-              fontSize: 13,
-              cursor: isLoading ? "not-allowed" : "pointer",
-              opacity: isLoading ? 0.6 : 1,
-              display: "inline-block",
-            }}
-          >
-            {isLoading ? "Loading..." : "Upload JSON File"}
-          </label>
-        </div>
+        <div />
       </div>
       <p style={{ marginBottom: 16, color: "#4b5563" }}>
         Drag dots along the hill to reflect where each scope is. 
@@ -597,22 +612,103 @@ const App: React.FC = () => {
       <div style={{ marginTop: 24, display: "flex", gap: 24, alignItems: "flex-start" }}>
         <div style={{ flex: 2 }}>
           <h3 style={{ marginBottom: 8 }}>Scopes on this hill</h3>
-          <button
-            type="button"
-            onClick={handleAddEpic}
-            style={{
-              padding: "6px 12px",
-              borderRadius: 4,
-              border: "1px solid #4b6fff",
-              background: "#4b6fff",
-              color: "white",
-              fontSize: 13,
-              cursor: "pointer",
-              marginBottom: 12,
-            }}
-          >
-            + Add Epic
-          </button>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={handleAddEpic}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 4,
+                border: "1px solid #4b6fff",
+                background: "#4b6fff",
+                color: "white",
+                fontSize: 13,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span>➕</span>
+              <span>Add Epic</span>
+            </button>
+            <input
+              type="file"
+              accept=".json"
+              onChange={handleFileUpload}
+              disabled={isLoading}
+              id="json-file-input"
+              style={{ display: "none" }}
+            />
+            <label
+              htmlFor="json-file-input"
+              style={{
+                padding: "6px 12px",
+                borderRadius: 4,
+                border: "1px solid #4b6fff",
+                background: "#4b6fff",
+                color: "white",
+                fontSize: 13,
+                cursor: isLoading ? "not-allowed" : "pointer",
+                opacity: isLoading ? 0.6 : 1,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span>⬆</span>
+              <span>{isLoading ? "Loading..." : "Upload JSON"}</span>
+            </label>
+            {isModified && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleRestore}
+                  disabled={isLoading || originalEpics.length === 0}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 4,
+                    border: "1px solid #f59e0b",
+                    background: "#f59e0b",
+                    color: "white",
+                    fontSize: 13,
+                    cursor: isLoading || originalEpics.length === 0 ? "not-allowed" : "pointer",
+                    opacity: isLoading || originalEpics.length === 0 ? 0.6 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <span>↺</span>
+                  <span>Restore</span>
+                </button>
+                {selectedProjectId && (
+                  <button
+                    key="save-button"
+                    type="button"
+                    onClick={handleSaveToFirestore}
+                    disabled={isSaving || isLoading}
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: 4,
+                      border: "1px solid #22c55e",
+                      background: "#22c55e",
+                      color: "white",
+                      fontSize: 13,
+                      cursor: isSaving || isLoading ? "not-allowed" : "pointer",
+                      opacity: isSaving || isLoading ? 0.6 : 1,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <span>⌄</span>
+                    <span>{isSaving ? "Saving..." : "Save to Firestore"}</span>
+                  </button>
+                )}
+              </>
+            )}
+          </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
