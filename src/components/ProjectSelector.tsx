@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { getProjects, createProject, testFirestoreAccess, type Project } from '../services/firestoreService';
+import { getProjects, createProject, testFirestoreAccess, testSnapshotDiscovery, type Project } from '../services/firestoreService';
+import { useTheme } from '../hooks/useTheme';
+import { getThemeColors } from '../utils/themeColors';
 
 interface ProjectSelectorProps {
   selectedProjectId: string | null;
@@ -12,6 +14,9 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   onProjectSelect,
   onProjectCreated,
 }) => {
+  const { theme } = useTheme();
+  const colors = getThemeColors(theme === 'dark');
+  
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
@@ -23,6 +28,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     loadProjects();
     // Also run diagnostic test
     testFirestoreAccess();
+    testSnapshotDiscovery();
   }, []);
 
   const loadProjects = async () => {
@@ -68,7 +74,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 
   if (isLoading) {
     return (
-      <div style={{ padding: '12px', color: '#6b7280' }}>
+      <div style={{ padding: '12px', color: colors.textPrimary }}>
         Loading projects...
       </div>
     );
@@ -80,17 +86,17 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         <div style={{
           padding: '12px',
           marginBottom: 12,
-          backgroundColor: '#fef2f2',
-          border: '1px solid #fecaca',
+          backgroundColor: colors.errorBg,
+          border: `1px solid ${colors.errorBorder}`,
           borderRadius: 4,
-          color: '#991b1b',
+          color: colors.errorText,
           fontSize: 13,
         }}>
           {error}
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <label style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>
+        <label style={{ fontSize: 14, fontWeight: 500, color: colors.textPrimary }}>
           Project:
         </label>
         <select
@@ -103,53 +109,24 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           style={{
             padding: '6px 12px',
             borderRadius: 4,
-            border: '1px solid #d1d5db',
+            border: `1px solid ${colors.selectBorder}`,
             fontSize: 14,
             minWidth: 200,
-            backgroundColor: isLoading || error ? '#f3f4f6' : 'white',
+            backgroundColor: isLoading || error ? colors.bgTertiary : colors.selectBg,
             cursor: isLoading || error ? 'not-allowed' : 'pointer',
+            color: selectedProjectId ? colors.selectText : colors.selectTextPlaceholder,
           }}
         >
-          <option value="">-- Select a project --</option>
+          <option value="" disabled hidden>
+            Select a project...
+          </option>
           {projects.map((project) => (
             <option key={project.id} value={project.id}>
               {project.name}
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={() => setShowCreateForm(!showCreateForm)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 4,
-            border: '1px solid #4b6fff',
-            background: '#4b6fff',
-            color: 'white',
-            fontSize: 13,
-            cursor: 'pointer',
-          }}
-        >
-          + New Project
-        </button>
-        <button
-          type="button"
-          onClick={loadProjects}
-          disabled={isLoading}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 4,
-            border: '1px solid #6b7280',
-            background: 'white',
-            color: '#374151',
-            fontSize: 13,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-            opacity: isLoading ? 0.6 : 1,
-          }}
-          title="Refresh project list"
-        >
-          ↻ Refresh
-        </button>
+        
       </div>
 
       {showCreateForm && (
@@ -157,9 +134,9 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           onSubmit={handleCreateProject}
           style={{
             padding: 12,
-            border: '1px solid #e5e7eb',
+            border: `1px solid ${colors.borderPrimary}`,
             borderRadius: 4,
-            backgroundColor: '#f9fafb',
+            backgroundColor: colors.bgSecondary,
             marginBottom: 12,
           }}
         >
@@ -174,8 +151,10 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
                 flex: 1,
                 padding: '6px 12px',
                 borderRadius: 4,
-                border: '1px solid #d1d5db',
+                border: `1px solid ${colors.inputBorder}`,
                 fontSize: 14,
+                backgroundColor: colors.inputBg,
+                color: colors.inputText,
               }}
               autoFocus
             />
@@ -185,8 +164,8 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               style={{
                 padding: '6px 12px',
                 borderRadius: 4,
-                border: '1px solid #4b6fff',
-                background: '#4b6fff',
+                border: `1px solid ${colors.infoBg}`,
+                background: colors.infoBg,
                 color: 'white',
                 fontSize: 13,
                 cursor: isCreating || !newProjectName.trim() ? 'not-allowed' : 'pointer',
@@ -205,9 +184,9 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               style={{
                 padding: '6px 12px',
                 borderRadius: 4,
-                border: '1px solid #d1d5db',
-                background: 'white',
-                color: '#374151',
+                border: `1px solid ${colors.borderSecondary}`,
+                background: colors.buttonBg,
+                color: colors.buttonText,
                 fontSize: 13,
                 cursor: isCreating ? 'not-allowed' : 'pointer',
               }}
@@ -219,12 +198,12 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       )}
 
       {projects.length > 0 && !error && (
-        <div style={{ fontSize: 12, color: '#6b7280' }}>
+        <div style={{ fontSize: 12, color: colors.textSecondary }}>
           {projects.length} project{projects.length !== 1 ? 's' : ''} available
         </div>
       )}
       {projects.length === 0 && !isLoading && !error && (
-        <div style={{ fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>
+        <div style={{ fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' }}>
           No projects yet. Click "+ New Project" to create one.
         </div>
       )}

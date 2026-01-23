@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useTheme } from "./hooks/useTheme";
+import { getThemeColors } from "./utils/themeColors";
 
    export type HillPhase = "UPHILL" | "CREST" | "DOWNHILL" | "DONE";
 
@@ -67,6 +69,8 @@ function wrapText(text: string, maxCharsPerLine: number = 15): string[] {
 }
 
 const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX }) => {
+  const { theme } = useTheme();
+  const colors = getThemeColors(theme === 'dark');
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
 
@@ -122,7 +126,7 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX }) => {
       width="100%"
       height={HILL_HEIGHT}
       viewBox={`0 0 ${HILL_WIDTH} ${HILL_HEIGHT}`}
-      style={{ border: "1px solid #ddd", borderRadius: 8, background: "#fafafa" }}
+      style={{ border: `1px solid ${colors.chartBorder}`, borderRadius: 8, background: colors.chartBg }}
     >
       {/* Baseline */}
       <line
@@ -130,12 +134,12 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX }) => {
         y1={HILL_HEIGHT - MARGIN_Y}
         x2={HILL_WIDTH - MARGIN_X}
         y2={HILL_HEIGHT - MARGIN_Y}
-        stroke="#ccc"
+        stroke={colors.chartBaseline}
         strokeWidth={2}
       />
 
       {/* Hill curve */}
-      <path d={pathD} fill="none" stroke="#4b6fff" strokeWidth={4} />
+      <path d={pathD} fill="none" stroke={colors.chartLine} strokeWidth={4} />
 
       {/* Dots */}
       {epics.map((epic) => {
@@ -160,13 +164,13 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX }) => {
             onMouseDown={() => setDraggingKey(epic.key)}
             style={{ cursor: "grab" }}
           >
-            <circle cx={svgX} cy={svgY} r={10} fill={color} stroke="#1f2933" strokeWidth={1.5} />
+            <circle cx={svgX} cy={svgY} r={10} fill={color} stroke={theme === 'dark' ? '#f9fafb' : '#1f2933'} strokeWidth={1.5} />
             <text
               x={svgX}
               y={labelY}
               textAnchor="middle"
               fontSize={11}
-              fill="#111827"
+              fill={colors.chartText}
               fontWeight="500"
               style={{ pointerEvents: "none" }}
             >

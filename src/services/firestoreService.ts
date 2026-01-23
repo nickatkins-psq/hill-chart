@@ -1,5 +1,6 @@
 import {
   collection,
+  collectionGroup,
   doc,
   getDoc,
   getDocs,
@@ -37,8 +38,29 @@ export interface ProjectData {
   }>;
 }
 
+export interface ProjectSnapshotMeta {
+  id: string;
+  generated?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 // Hillcharts collection - contains both project metadata and data
 const HILLCHARTS_COLLECTION = 'hillcharts';
+
+function getStoredProjectIds(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem('hillchart_project_ids');
+    if (!raw) return [];
+    return raw
+      .split(/[\n,]+/)
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Diagnostic function to test Firestore access
@@ -99,6 +121,18 @@ export async function testFirestoreAccess(): Promise<void> {
 }
 
 /**
+ * Diagnostic: discover snapshots via collectionGroup
+ */
+export async function testSnapshotDiscovery(): Promise<void> {
+  try {
+    const snapshotsRef = collectionGroup(db, 'snapshots');
+    await getDocs(snapshotsRef);
+  } catch (error: any) {
+    // Error handling
+  }
+}
+
+/**
  * Get all projects from the hillcharts collection
  */
 export async function getProjects(): Promise<Project[]> {
@@ -121,8 +155,128 @@ export async function getProjects(): Promise<Project[]> {
       hasPendingWrites: querySnapshot.metadata.hasPendingWrites,
     });
     
+    // CRITICAL DISCOVERY: Document is in a SUBCOLLECTION!
+    // User provided: /hillcharts/centralized-reporting/snapshots/2026-01-16-175406Z
+    // This means: hillcharts (collection) → centralized-reporting (doc) → snapshots (subcollection) → 2026-01-16-175406Z (doc)
+    
+    // Test: Query all documents in hillcharts root to see what we can access
+    const allDocsSnap = await getDocs(hillchartsRef);
+    console.warn(`[getProjects] Documents in hillcharts root collection:`, allDocsSnap.docs.map(d => d.id));
+    
+    // Test 1: Try reading the parent document (even if it doesn't show in query)
+    // Security rules might filter it from queries but allow direct reads
+    try {
+      const parentDocRef = doc(hillchartsRef, 'centralized-reporting');
+      const parentDocSnap = await getDoc(parentDocRef);
+      if (parentDocSnap.exists()) {
+        console.warn(`[getProjects] ✅ Parent doc "centralized-reporting" EXISTS (can be read directly)!`);
+        console.warn(`[getProjects] Parent doc data:`, parentDocSnap.data());
+        
+        // Test 2: Query the snapshots subcollection
+        const snapshotsRef = collection(parentDocRef, 'snapshots');
+        const snapshotsSnap = await getDocs(snapshotsRef);
+        console.warn(`[getProjects] ✅ Found ${snapshotsSnap.docs.length} documents in snapshots subcollection`);
+        console.warn(`[getProjects] Snapshot IDs:`, snapshotsSnap.docs.map(d => d.id));
+        
+        // Test 3: Read the specific snapshot document
+        const snapshotDocRef = doc(snapshotsRef, '2026-01-16-175406Z');
+        const snapshotDocSnap = await getDoc(snapshotDocRef);
+        if (snapshotDocSnap.exists()) {
+          const snapshotData = snapshotDocSnap.data();
+          console.warn(`[getProjects] ✅ Snapshot doc "2026-01-16-175406Z" exists!`);
+          console.warn(`[getProjects] Snapshot fields:`, Object.keys(snapshotData || {}));
+          console.warn(`[getProjects] Snapshot data:`, snapshotData);
+        } else {
+          console.warn(`[getProjects] ❌ Snapshot doc "2026-01-16-175406Z" does not exist`);
+        }
+      } else {
+        console.warn(`[getProjects] ❌ Parent doc "centralized-reporting" does not exist (cannot read directly)`);
+      }
+    } catch (subcollectionError: any) {
+      console.warn(`[getProjects] ❌ Error accessing subcollection:`, subcollectionError?.code, subcollectionError?.message);
+    }
+
+    
+    // Test: Try to find ALL parent documents by querying and checking each for subcollections
+    console.warn(`[getProjects] 🔍 Testing all root documents for subcollections...`);
+    for (const rootDoc of allDocsSnap.docs) {
+      try {
+        const subcollectionsRef = collection(rootDoc.ref, 'snapshots');
+        const subcollectionsSnap = await getDocs(subcollectionsRef);
+        if (subcollectionsSnap.docs.length > 0) {
+          console.warn(`[getProjects] ✅ Root doc "${rootDoc.id}" has ${subcollectionsSnap.docs.length} snapshots!`);
+        }
+      } catch (e) {
+        // Expected if no subcollection
+      }
+    }
+    
     // Check if this might be a permissions issue
     if (querySnapshot.docs.length === 0) {
+      // Test if we can write (to verify rules allow write but maybe not read)
+      try {
+        const testDocRef = doc(hillchartsRef, '_test_write_access');
+        await setDoc(testDocRef, { test: true, timestamp: Timestamp.now() });
+        await deleteDoc(testDocRef);
+        console.warn(`[getProjects] ⚠️ Write test PASSED - rules allow write but read returns 0 docs (likely rules filtering)`);
+        
+        // Test reading the test document we just wrote (before deleting)
+        try {
+          const testReadRef = doc(hillchartsRef, '_test_write_access');
+          await setDoc(testReadRef, { test: true, timestamp: Timestamp.now(), project: 'Test Project' });
+          const testReadSnap = await getDoc(testReadRef);
+          console.warn(`[getProjects] Direct document read (getDoc) test: ${testReadSnap.exists() ? 'SUCCESS' : 'FAILED'}`);
+          
+          // Test if we can query it back with getDocs
+          const testQuerySnap = await getDocs(hillchartsRef);
+          const testDocInQuery = testQuerySnap.docs.find(d => d.id === '_test_write_access');
+          console.warn(`[getProjects] Test doc in getDocs query: ${testDocInQuery ? 'FOUND' : 'NOT FOUND'} (total docs: ${testQuerySnap.docs.length})`);
+          
+          await deleteDoc(testReadRef);
+        } catch (readError: any) {
+          console.warn(`[getProjects] Direct document read test FAILED:`, readError?.code, readError?.message);
+        }
+        
+        // Test alternative collection names (case sensitivity)
+        const altCollections = ['Hillcharts', 'HILLCHARTS', 'hillCharts'];
+        for (const altName of altCollections) {
+          try {
+            const altRef = collection(db, altName);
+            const altSnap = await getDocs(altRef);
+            if (altSnap.docs.length > 0) {
+              console.warn(`[getProjects] ⚠️ Found ${altSnap.docs.length} docs in collection "${altName}" - case sensitivity issue!`);
+            }
+          } catch (e) {
+            // Expected to fail for wrong collection names
+          }
+        }
+        
+        // Try to create a document with the same structure as expected project data
+        try {
+          const testProjectDocRef = doc(hillchartsRef, '_test_project_structure');
+          const testProjectData = {
+            project: 'Test Project Name',
+            generated: new Date().toISOString(),
+            task_completion: {
+              completed: 0,
+              total: 0,
+              percentage: 0,
+            },
+            scopes: [],
+            updatedAt: Timestamp.now(),
+          };
+          await setDoc(testProjectDocRef, testProjectData);
+          const testProjectQuerySnap = await getDocs(hillchartsRef);
+          const testProjectInQuery = testProjectQuerySnap.docs.find(d => d.id === '_test_project_structure');
+          console.warn(`[getProjects] Test project doc in query: ${testProjectInQuery ? 'FOUND' : 'NOT FOUND'} (total: ${testProjectQuerySnap.docs.length})`);
+          await deleteDoc(testProjectDocRef);
+        } catch (e: any) {
+          // Error handling
+        }
+      } catch (writeError: any) {
+        console.warn(`[getProjects] ⚠️ Write test FAILED:`, writeError?.code, writeError?.message);
+      }
+      
       console.warn(`[getProjects] ⚠️ WARNING: No documents found in '${HILLCHARTS_COLLECTION}' collection`);
       console.warn(`[getProjects] This could mean:`);
       console.warn(`[getProjects]   1. The collection is empty (verify in Firebase Console)`);
@@ -136,7 +290,8 @@ export async function getProjects(): Promise<Project[]> {
       console.warn(`[getProjects]   - Check Firestore Rules allow read access to hillcharts collection`);
     }
     
-    const projects = querySnapshot.docs.map((doc) => {
+    const rootDocs = querySnapshot.docs.filter((doc) => !doc.id.startsWith('_test_'));
+    const projects = rootDocs.map((doc) => {
       try {
         const data = doc.data();
         console.log(`[getProjects] Document ${doc.id}:`, data);
@@ -205,8 +360,74 @@ export async function getProjects(): Promise<Project[]> {
     
     console.log(`[getProjects] Returning ${projects.length} projects`);
     
+    if (projects.length === 0) {
+      try {
+        const snapshotsRef = collectionGroup(db, 'snapshots');
+        const snapshotsSnap = await getDocs(snapshotsRef);
+        const snapshotProjects = snapshotsSnap.docs.map((docSnap) => {
+          const data = docSnap.data() as Partial<ProjectData>;
+          const parts = docSnap.ref.path.split('/');
+          const projectIndex = parts.findIndex((p) => p === 'hillcharts');
+          const projectId = projectIndex >= 0 ? parts[projectIndex + 1] : docSnap.id;
+          const projectName = data.project || projectId;
+          const generated = typeof data.generated === 'string' ? new Date(data.generated) : new Date();
+          return {
+            id: projectId,
+            name: projectName,
+            createdAt: generated,
+            updatedAt: generated,
+          } as Project;
+        });
+        const uniqueById = new Map<string, Project>();
+        snapshotProjects.forEach((project) => {
+          const existing = uniqueById.get(project.id);
+          if (!existing || existing.updatedAt < project.updatedAt) {
+            uniqueById.set(project.id, project);
+          }
+        });
+        const snapshotProjectList = Array.from(uniqueById.values()).sort(
+          (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+        );
+        return snapshotProjectList;
+      } catch (snapshotError: any) {
+        // If collectionGroup is denied, try known project IDs directly
+        const storedIds = getStoredProjectIds();
+        const knownProjectIds = Array.from(
+          new Set(['centralized-reporting', 'report-date-filtering', ...storedIds])
+        );
+        const discoveredProjects: Project[] = [];
+        for (const projectId of knownProjectIds) {
+          try {
+            const snapshotsRef = collection(db, HILLCHARTS_COLLECTION, projectId, 'snapshots');
+            const snapshotsSnap = await getDocs(snapshotsRef);
+            if (snapshotsSnap.docs.length > 0) {
+              const firstSnapshot = snapshotsSnap.docs[0].data() as Partial<ProjectData>;
+              const projectName = firstSnapshot.project || projectId;
+              const generated = typeof firstSnapshot.generated === 'string' ? new Date(firstSnapshot.generated) : new Date();
+              discoveredProjects.push({
+                id: projectId,
+                name: projectName,
+                createdAt: generated,
+                updatedAt: generated,
+              });
+            }
+          } catch (directError) {
+            // ignore and continue
+          }
+        }
+        if (discoveredProjects.length > 0) {
+          return discoveredProjects;
+        }
+        // If no known projects are found, return empty list instead of throwing
+        // to avoid blocking the UI with a permission error.
+        return [];
+      }
+    }
+    
     // Sort by updatedAt descending (most recently updated first)
-    return projects.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    const sortedProjects = projects.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    
+    return sortedProjects;
   } catch (error: any) {
     console.error('[getProjects] Error getting projects:', error);
     
@@ -268,6 +489,46 @@ export async function createProject(name: string): Promise<Project> {
     };
   } catch (error) {
     console.error('Error creating project:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get snapshots for a project (from subcollection)
+ */
+export async function getProjectSnapshots(projectId: string): Promise<ProjectSnapshotMeta[]> {
+  try {
+    const snapshotsRef = collection(db, HILLCHARTS_COLLECTION, projectId, 'snapshots');
+    const snapshotsSnap = await getDocs(snapshotsRef);
+    const snapshots = snapshotsSnap.docs.map((docSnap) => {
+      const data = docSnap.data() as Partial<ProjectData> & { createdAt?: any; updatedAt?: any };
+      return {
+        id: docSnap.id,
+        generated: typeof data.generated === 'string' ? data.generated : undefined,
+        createdAt: data.createdAt?.toDate?.() ?? undefined,
+        updatedAt: data.updatedAt?.toDate?.() ?? undefined,
+      } as ProjectSnapshotMeta;
+    });
+    const sorted = snapshots.sort((a, b) => a.id.localeCompare(b.id));
+    return sorted;
+  } catch (error: any) {
+    throw error;
+  }
+}
+
+/**
+ * Get project snapshot data (JSON) for a snapshot document
+ */
+export async function getProjectSnapshotData(projectId: string, snapshotId: string): Promise<ProjectData | null> {
+  try {
+    const snapshotRef = doc(db, HILLCHARTS_COLLECTION, projectId, 'snapshots', snapshotId);
+    const snapshotSnap = await getDoc(snapshotRef);
+    if (!snapshotSnap.exists()) {
+      return null;
+    }
+    const data = snapshotSnap.data();
+    return data as ProjectData;
+  } catch (error: any) {
     throw error;
   }
 }

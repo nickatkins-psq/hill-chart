@@ -8,10 +8,15 @@ import ProjectSelector from "./components/ProjectSelector";
 import Toast from "./components/Toast";
 import {
   getProjectData,
+  getProjectSnapshotData,
+  getProjectSnapshots,
   saveProjectData,
   type Project,
   type ProjectData,
+  type ProjectSnapshotMeta,
 } from "./services/firestoreService";
+import { useTheme } from "./hooks/useTheme";
+import { getThemeColors } from "./utils/themeColors";
 
 const STORAGE_KEY = "hillChartEpics_v1";
 
@@ -79,19 +84,18 @@ function formatDateForDisplay(date: Date): string {
   });
 }
 
-function parseDateFromFilename(filename: string): Date | null {
-  // Try to extract date from filename pattern: hillchart-YYYY-MM-DD.json
-  const match = filename.match(/hillchart-(\d{4})-(\d{2})-(\d{2})\.json/i);
-  if (match) {
-    const year = parseInt(match[1], 10);
-    const month = parseInt(match[2], 10) - 1; // Month is 0-indexed
-    const day = parseInt(match[3], 10);
-    const date = new Date(year, month, day);
-    if (!isNaN(date.getTime())) {
-      return date;
-    }
-  }
-  return null;
+function parseSnapshotIdToDate(snapshotId: string): Date | null {
+  // Expected format: YYYY-MM-DD-HHMMSSZ (e.g., 2026-01-16-175406Z)
+  const match = snapshotId.match(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})Z$/);
+  if (!match) return null;
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10) - 1;
+  const day = parseInt(match[3], 10);
+  const hours = parseInt(match[4], 10);
+  const minutes = parseInt(match[5], 10);
+  const seconds = parseInt(match[6], 10);
+  const date = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
+  return isNaN(date.getTime()) ? null : date;
 }
 
 function normalizeDate(date: Date): string {
@@ -154,6 +158,9 @@ function phaseLabel(phase: HillPhase): string {
 }
 
 const App: React.FC = () => {
+  const { theme, toggleTheme } = useTheme();
+  const colors = getThemeColors(theme === 'dark');
+  
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [epics, setEpics] = useState<EpicDot[]>(() => loadInitialEpics());
@@ -163,8 +170,10 @@ const App: React.FC = () => {
   const [currentDate, setCurrentDate] = useState<Date | null>(null);
   const [hasPreviousDay, setHasPreviousDay] = useState(false);
   const [hasNextDay, setHasNextDay] = useState(false);
+  const [projectSnapshots, setProjectSnapshots] = useState<ProjectSnapshotMeta[]>([]);
+  const [currentSnapshotIndex, setCurrentSnapshotIndex] = useState<number | null>(null);
   // Store uploaded files in memory keyed by date string (YYYY-MM-DD)
-  const [uploadedFiles, setUploadedFiles] = useState<Map<string, HillChartData>>(new Map());
+  const [uploadedFiles] = useState<Map<string, HillChartData>>(new Map());
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   // Track if chart has been modified by dragging
@@ -195,43 +204,84 @@ const App: React.FC = () => {
       return;
     }
 
-    // Load from Firestore
+    // Load from Firestore (snapshots)
     setIsLoading(true);
     const currentProjectName = selectedProjectName;
-    getProjectData(selectedProjectId)
-      .then((data) => {
-        if (data && data.scopes && data.scopes.length > 0) {
-          const convertedEpics = convertScopesToEpics(data.scopes);
-          setEpics(convertedEpics);
-          setOriginalEpics(convertedEpics); // Store original positions
-          setProjectName(data.project);
-          if (data.generated) {
-            const parsedDate = new Date(data.generated);
-            if (!isNaN(parsedDate.getTime())) {
-              setCurrentDate(parsedDate);
+    const loadSnapshots = async () => {
+      try {
+        const snapshots = await getProjectSnapshots(selectedProjectId);
+        setProjectSnapshots(snapshots);
+        if (snapshots.length > 0) {
+          const lastIndex = snapshots.length - 1;
+          const snapshot = snapshots[lastIndex];
+          setCurrentSnapshotIndex(lastIndex);
+          const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+          if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
+            const convertedEpics = convertScopesToEpics(snapshotData.scopes);
+            setEpics(convertedEpics);
+            setOriginalEpics(convertedEpics);
+            setProjectName(snapshotData.project || currentProjectName || null);
+            const parsedSnapshotDate =
+              parseSnapshotIdToDate(snapshot.id) ||
+              (snapshotData.generated ? new Date(snapshotData.generated) : null);
+            if (parsedSnapshotDate && !isNaN(parsedSnapshotDate.getTime())) {
+              setCurrentDate(parsedSnapshotDate);
+            } else {
+              setCurrentDate(null);
             }
+          } else {
+            setEpics([]);
+            setOriginalEpics([]);
+            setProjectName(currentProjectName || null);
+            setCurrentDate(null);
           }
+          setHasPreviousDay(lastIndex > 0);
+          setHasNextDay(lastIndex < snapshots.length - 1);
         } else {
-          // New project - start with empty epics
-          setEpics([]);
-          setOriginalEpics([]);
-          setProjectName(currentProjectName || null);
-          setCurrentDate(null);
+          // Fallback to root project data if no snapshots exist
+          const data = await getProjectData(selectedProjectId);
+          if (data && data.scopes && data.scopes.length > 0) {
+            const convertedEpics = convertScopesToEpics(data.scopes);
+            setEpics(convertedEpics);
+            setOriginalEpics(convertedEpics);
+            setProjectName(data.project);
+            if (data.generated) {
+              const parsedDate = new Date(data.generated);
+              if (!isNaN(parsedDate.getTime())) {
+                setCurrentDate(parsedDate);
+              }
+            }
+          } else {
+            setEpics([]);
+            setOriginalEpics([]);
+            setProjectName(currentProjectName || null);
+            setCurrentDate(null);
+          }
+          setHasPreviousDay(false);
+          setHasNextDay(false);
+          setCurrentSnapshotIndex(null);
         }
-        setIsModified(false); // Reset modification flag when loading data
-      })
-      .catch((error) => {
-        console.error("Error loading project data:", error);
-        alert("Failed to load project data. Please try again.");
-      })
-      .finally(() => {
+        setIsModified(false);
+      } catch (error) {
+        console.error("Error loading project snapshots:", error);
+        alert("Failed to load project data. Please check Firestore permissions.");
+      } finally {
         setIsLoading(false);
-      });
+      }
+    };
+
+    loadSnapshots();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
   // Check for previous/next day files when date changes
   useEffect(() => {
+    if (selectedProjectId && projectSnapshots.length > 0 && currentSnapshotIndex !== null) {
+      setHasPreviousDay(currentSnapshotIndex > 0);
+      setHasNextDay(currentSnapshotIndex < projectSnapshots.length - 1);
+      return;
+    }
+
     if (!currentDate) {
       setHasPreviousDay(false);
       setHasNextDay(false);
@@ -261,7 +311,7 @@ const App: React.FC = () => {
     };
 
     checkNavigation();
-  }, [currentDate, uploadedFiles]);
+  }, [currentDate, uploadedFiles, selectedProjectId, projectSnapshots, currentSnapshotIndex]);
 
   const loadDataForDate = async (date: Date) => {
     setIsLoading(true);
@@ -293,7 +343,43 @@ const App: React.FC = () => {
     }
   };
 
+  const loadSnapshotByIndex = async (index: number) => {
+    if (!selectedProjectId || !projectSnapshots[index]) return;
+    const snapshot = projectSnapshots[index];
+    setIsLoading(true);
+    try {
+      const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+      if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
+        const convertedEpics = convertScopesToEpics(snapshotData.scopes);
+        setEpics(convertedEpics);
+        setOriginalEpics(convertedEpics);
+        setProjectName(snapshotData.project || selectedProjectName || projectName || null);
+        const parsedSnapshotDate =
+          parseSnapshotIdToDate(snapshot.id) ||
+          (snapshotData.generated ? new Date(snapshotData.generated) : null);
+        if (parsedSnapshotDate && !isNaN(parsedSnapshotDate.getTime())) {
+          setCurrentDate(parsedSnapshotDate);
+        }
+      }
+      setCurrentSnapshotIndex(index);
+      setIsModified(false);
+    } catch (error) {
+      console.error("Error loading snapshot data:", error);
+      setToast({
+        message: "Failed to load snapshot data. Please check Firestore permissions.",
+        type: 'error',
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handlePreviousDay = () => {
+    if (selectedProjectId && projectSnapshots.length > 0 && currentSnapshotIndex !== null) {
+      if (!hasPreviousDay) return;
+      loadSnapshotByIndex(currentSnapshotIndex - 1);
+      return;
+    }
     if (!currentDate || !hasPreviousDay) return;
     const prevDate = new Date(currentDate);
     prevDate.setDate(prevDate.getDate() - 1);
@@ -301,6 +387,11 @@ const App: React.FC = () => {
   };
 
   const handleNextDay = () => {
+    if (selectedProjectId && projectSnapshots.length > 0 && currentSnapshotIndex !== null) {
+      if (!hasNextDay) return;
+      loadSnapshotByIndex(currentSnapshotIndex + 1);
+      return;
+    }
     if (!currentDate || !hasNextDay) return;
     const nextDate = new Date(currentDate);
     nextDate.setDate(nextDate.getDate() + 1);
@@ -330,12 +421,6 @@ const App: React.FC = () => {
     });
   };
 
-  const handleAddEpic = () => {
-    const key = window.prompt("Enter Jira Epic key (e.g. PROJ-123):");
-    if (!key) return;
-    const title = window.prompt("Short title for this Epic (for you):") || key;
-    setEpics((prev) => [...prev, { key: key.trim(), title: title.trim(), x: 5 }]);
-  };
 
   const handleRemoveEpic = (key: string) => {
     if (!window.confirm(`Remove ${key} from this hill?`)) return;
@@ -344,6 +429,12 @@ const App: React.FC = () => {
 
   const handleProjectSelect = (projectId: string | null) => {
     setSelectedProjectId(projectId);
+    if (!projectId) {
+      setProjectSnapshots([]);
+      setCurrentSnapshotIndex(null);
+      setHasPreviousDay(false);
+      setHasNextDay(false);
+    }
   };
 
   const handleProjectCreated = (project: Project) => {
@@ -404,126 +495,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!file.name.endsWith(".json")) {
-      setToast({
-        message: "Please upload a JSON file",
-        type: 'error',
-      });
-      return;
-    }
-
-    setIsLoading(true);
-    const reader = new FileReader();
-
-    reader.onload = async (e) => {
-      try {
-        const text = e.target?.result as string;
-        const data = JSON.parse(text) as HillChartData;
-
-        // Validate the data structure
-        if (!data.scopes || !Array.isArray(data.scopes) || data.scopes.length === 0) {
-          setToast({
-            message: "Invalid JSON format: 'scopes' array is required and must not be empty",
-            type: 'error',
-          });
-          setIsLoading(false);
-          return;
-        }
-
-        // Try to extract date from filename first, then from generated field
-        let parsedDate: Date | null = parseDateFromFilename(file.name);
-        if (!parsedDate && data.generated) {
-          parsedDate = new Date(data.generated);
-          if (isNaN(parsedDate.getTime())) {
-            parsedDate = null;
-          }
-        }
-
-        // Store the uploaded file data in memory
-        if (parsedDate) {
-          const dateStr = normalizeDate(parsedDate);
-          setUploadedFiles((prev) => {
-            const newMap = new Map(prev);
-            newMap.set(dateStr, data);
-            return newMap;
-          });
-        }
-
-        const convertedEpics = convertScopesToEpics(data.scopes);
-        setEpics(convertedEpics);
-        setOriginalEpics(convertedEpics); // Store original positions
-        setProjectName(data.project || null);
-        
-        if (parsedDate) {
-          setCurrentDate(parsedDate);
-        }
-
-        // Auto-save to Firestore if project is selected
-        if (selectedProjectId) {
-          try {
-            const scopes = convertEpicsToScopes(convertedEpics, data.project || selectedProjectName || "Untitled Project");
-            const projectData: ProjectData = {
-              project: data.project || selectedProjectName || "Untitled Project",
-              generated: new Date().toISOString(),
-              task_completion: {
-                completed: convertedEpics.filter((e) => e.x >= 80).length,
-                total: convertedEpics.length,
-                percentage: convertedEpics.length > 0 
-                  ? (convertedEpics.filter((e) => e.x >= 80).length / convertedEpics.length) * 100 
-                  : 0,
-              },
-              scopes,
-            };
-            await saveProjectData(selectedProjectId, projectData);
-            setProjectName(projectData.project);
-            setCurrentDate(new Date());
-            setOriginalEpics(convertedEpics); // Update original positions after auto-saving
-            setIsModified(false); // Reset modification flag after auto-saving
-            setToast({
-              message: `Imported and saved ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""}`,
-              type: 'success',
-            });
-          } catch (error) {
-            console.error("Error auto-saving project data:", error);
-            setToast({
-              message: `Imported ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""} (save failed)`,
-              type: 'success',
-            });
-          }
-        } else {
-          // Show toast notification (no auto-save if no project selected)
-          setToast({
-            message: `Imported ${data.scopes.length} scopes${data.project ? ` from ${data.project}` : ""}${parsedDate ? ` for ${formatDateForDisplay(parsedDate)}` : ""}`,
-            type: 'success',
-          });
-        }
-      } catch (error) {
-        setToast({
-          message: `Error parsing JSON file: ${error instanceof Error ? error.message : String(error)}`,
-          type: 'error',
-        });
-      } finally {
-        setIsLoading(false);
-        // Reset the input so the same file can be uploaded again
-        event.target.value = "";
-      }
-    };
-
-    reader.onerror = () => {
-      setToast({
-        message: "Error reading file",
-        type: 'error',
-      });
-      setIsLoading(false);
-      event.target.value = "";
-    };
-
-    reader.readAsText(file);
-  };
 
   return (
     <>
@@ -541,8 +512,28 @@ const App: React.FC = () => {
           padding: 24,
           maxWidth: 1100,
           margin: "0 auto",
+          backgroundColor: colors.bgPrimary,
+          color: colors.textPrimary,
         }}
       >
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          style={{
+            padding: "6px 12px",
+            borderRadius: 4,
+            border: `1px solid ${colors.borderSecondary}`,
+            background: colors.buttonBg,
+            color: colors.buttonText,
+            fontSize: 13,
+            cursor: "pointer",
+          }}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
+      </div>
       <ProjectSelector
         selectedProjectId={selectedProjectId}
         onProjectSelect={handleProjectSelect}
@@ -559,9 +550,9 @@ const App: React.FC = () => {
               style={{
                 padding: "4px 8px",
                 borderRadius: 4,
-                border: "1px solid #9ca3af",
-                background: hasPreviousDay && !isLoading ? "#ffffff" : "#d1d5db",
-                color: hasPreviousDay && !isLoading ? "#374151" : "#6b7280",
+                border: `1px solid ${colors.borderTertiary}`,
+                background: hasPreviousDay && !isLoading ? colors.buttonBg : colors.buttonBgDisabled,
+                color: hasPreviousDay && !isLoading ? colors.buttonText : colors.buttonTextDisabled,
                 fontSize: 13,
                 cursor: hasPreviousDay && !isLoading ? "pointer" : "not-allowed",
                 fontWeight: "bold",
@@ -577,9 +568,9 @@ const App: React.FC = () => {
               style={{
                 padding: "4px 8px",
                 borderRadius: 4,
-                border: "1px solid #9ca3af",
-                background: hasNextDay && !isLoading ? "#ffffff" : "#d1d5db",
-                color: hasNextDay && !isLoading ? "#374151" : "#6b7280",
+                border: `1px solid ${colors.borderTertiary}`,
+                background: hasNextDay && !isLoading ? colors.buttonBg : colors.buttonBgDisabled,
+                color: hasNextDay && !isLoading ? colors.buttonText : colors.buttonTextDisabled,
                 fontSize: 13,
                 cursor: hasNextDay && !isLoading ? "pointer" : "not-allowed",
                 fontWeight: "bold",
@@ -589,10 +580,10 @@ const App: React.FC = () => {
               →
             </button>
           </div>
-          <h2 style={{ margin: 0 }}>
+          <h2 style={{ margin: 0, color: colors.textPrimary }}>
             {selectedProjectId && projectName ? `${projectName} - Hill Chart` : "Team Hill Chart (local prototype)"}
             {currentDate && (
-              <span style={{ fontSize: 16, fontWeight: "normal", color: "#6b7280", marginLeft: 8 }}>
+              <span style={{ fontSize: 16, fontWeight: "normal", color: colors.textSecondary, marginLeft: 8 }}>
                 {formatDateForDisplay(currentDate)}
               </span>
             )}
@@ -600,65 +591,21 @@ const App: React.FC = () => {
         </div>
         <div />
       </div>
-      <p style={{ marginBottom: 16, color: "#4b5563" }}>
+      <p style={{ marginBottom: 16, color: colors.textSecondary }}>
         Drag dots along the hill to reflect where each scope is. 
         {selectedProjectId 
           ? " Click 'Save to Firestore' to save your changes." 
           : " Positions are saved locally. Select a project to save to Firestore."}
       </p>
 
-      <HillChart epics={epics} onUpdateEpicX={handleUpdateEpicX} />
+      <div style={{ backgroundColor: colors.bgPrimary }}>
+        <HillChart epics={epics} onUpdateEpicX={handleUpdateEpicX} />
+      </div>
 
       <div style={{ marginTop: 24, display: "flex", gap: 24, alignItems: "flex-start" }}>
         <div style={{ flex: 2 }}>
-          <h3 style={{ marginBottom: 8 }}>Scopes on this hill</h3>
+          <h3 style={{ marginBottom: 8, color: colors.textPrimary }}>Scopes on this hill</h3>
           <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={handleAddEpic}
-              style={{
-                padding: "6px 12px",
-                borderRadius: 4,
-                border: "1px solid #4b6fff",
-                background: "#4b6fff",
-                color: "white",
-                fontSize: 13,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              <span>➕</span>
-              <span>Add Epic</span>
-            </button>
-            <input
-              type="file"
-              accept=".json"
-              onChange={handleFileUpload}
-              disabled={isLoading}
-              id="json-file-input"
-              style={{ display: "none" }}
-            />
-            <label
-              htmlFor="json-file-input"
-              style={{
-                padding: "6px 12px",
-                borderRadius: 4,
-                border: "1px solid #4b6fff",
-                background: "#4b6fff",
-                color: "white",
-                fontSize: 13,
-                cursor: isLoading ? "not-allowed" : "pointer",
-                opacity: isLoading ? 0.6 : 1,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-              }}
-            >
-              <span>⬆</span>
-              <span>{isLoading ? "Loading..." : "Upload JSON"}</span>
-            </label>
             {isModified && (
               <>
                 <button
@@ -712,19 +659,19 @@ const App: React.FC = () => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: 4 }}>
+                <th style={{ textAlign: "left", borderBottom: `1px solid ${colors.borderPrimary}`, padding: 4, color: colors.textPrimary, fontWeight: 600 }}>
                   Key
                 </th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: 4 }}>
+                <th style={{ textAlign: "left", borderBottom: `1px solid ${colors.borderPrimary}`, padding: 4, color: colors.textPrimary, fontWeight: 600 }}>
                   Title
                 </th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: 4 }}>
+                <th style={{ textAlign: "left", borderBottom: `1px solid ${colors.borderPrimary}`, padding: 4, color: colors.textPrimary, fontWeight: 600 }}>
                   Position
                 </th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", padding: 4 }}>
+                <th style={{ textAlign: "left", borderBottom: `1px solid ${colors.borderPrimary}`, padding: 4, color: colors.textPrimary, fontWeight: 600 }}>
                   Phase
                 </th>
-                <th style={{ borderBottom: "1px solid #e5e7eb" }} />
+                <th style={{ borderBottom: `1px solid ${colors.borderPrimary}` }} />
               </tr>
             </thead>
             <tbody>
@@ -732,10 +679,10 @@ const App: React.FC = () => {
                 const phase = computePhase(e.x);
                 return (
                   <tr key={e.key}>
-                    <td style={{ padding: 4 }}>{e.key}</td>
-                    <td style={{ padding: 4 }}>{e.title}</td>
-                    <td style={{ padding: 4 }}>{e.x.toFixed(0)}%</td>
-                    <td style={{ padding: 4 }}>{phaseLabel(phase)}</td>
+                    <td style={{ padding: 4, color: colors.textPrimary }}>{e.key}</td>
+                    <td style={{ padding: 4, color: colors.textPrimary }}>{e.title}</td>
+                    <td style={{ padding: 4, color: colors.textPrimary }}>{e.x.toFixed(0)}%</td>
+                    <td style={{ padding: 4, color: colors.textPrimary }}>{phaseLabel(phase)}</td>
                     <td style={{ padding: 4 }}>
                       <button
                         type="button"
@@ -743,7 +690,7 @@ const App: React.FC = () => {
                         style={{
                           border: "none",
                           background: "transparent",
-                          color: "#b91c1c",
+                          color: "#ef4444",
                           cursor: "pointer",
                         }}
                       >
@@ -755,8 +702,8 @@ const App: React.FC = () => {
               })}
               {epics.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: 8, color: "#6b7280" }}>
-                    No scopes yet. Use "Add Epic" or import JSON data.
+                  <td colSpan={5} style={{ padding: 8, color: colors.textSecondary }}>
+                    No scopes yet.
                   </td>
                 </tr>
               )}
