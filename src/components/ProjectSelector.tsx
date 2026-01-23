@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { getProjects, createProject, type Project } from '../services/firestoreService';
+import { getProjects, createProject, testFirestoreAccess, type Project } from '../services/firestoreService';
 
 interface ProjectSelectorProps {
   selectedProjectId: string | null;
@@ -17,19 +17,27 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     loadProjects();
+    // Also run diagnostic test
+    testFirestoreAccess();
   }, []);
 
   const loadProjects = async () => {
     setIsLoading(true);
+    setError(null);
     try {
       const projectList = await getProjects();
       setProjects(projectList);
+      if (projectList.length === 0) {
+        setError('No projects found. Create a new project to get started.');
+      }
     } catch (error) {
       console.error('Error loading projects:', error);
-      alert('Failed to load projects. Please check your Firebase configuration.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setError(`Failed to load projects: ${errorMessage}. Check your Firebase configuration and Firestore security rules.`);
     } finally {
       setIsLoading(false);
     }
@@ -68,19 +76,38 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 
   return (
     <div style={{ marginBottom: 24 }}>
+      {error && (
+        <div style={{
+          padding: '12px',
+          marginBottom: 12,
+          backgroundColor: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 4,
+          color: '#991b1b',
+          fontSize: 13,
+        }}>
+          {error}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <label style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>
           Project:
         </label>
         <select
           value={selectedProjectId || ''}
-          onChange={(e) => onProjectSelect(e.target.value || null)}
+          onChange={(e) => {
+            const value = e.target.value;
+            onProjectSelect(value || null);
+          }}
+          disabled={isLoading || !!error}
           style={{
             padding: '6px 12px',
             borderRadius: 4,
             border: '1px solid #d1d5db',
             fontSize: 14,
             minWidth: 200,
+            backgroundColor: isLoading || error ? '#f3f4f6' : 'white',
+            cursor: isLoading || error ? 'not-allowed' : 'pointer',
           }}
         >
           <option value="">-- Select a project --</option>
@@ -104,6 +131,24 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           }}
         >
           + New Project
+        </button>
+        <button
+          type="button"
+          onClick={loadProjects}
+          disabled={isLoading}
+          style={{
+            padding: '6px 12px',
+            borderRadius: 4,
+            border: '1px solid #6b7280',
+            background: 'white',
+            color: '#374151',
+            fontSize: 13,
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            opacity: isLoading ? 0.6 : 1,
+          }}
+          title="Refresh project list"
+        >
+          ↻ Refresh
         </button>
       </div>
 
@@ -173,9 +218,14 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         </form>
       )}
 
-      {projects.length > 0 && (
+      {projects.length > 0 && !error && (
         <div style={{ fontSize: 12, color: '#6b7280' }}>
           {projects.length} project{projects.length !== 1 ? 's' : ''} available
+        </div>
+      )}
+      {projects.length === 0 && !isLoading && !error && (
+        <div style={{ fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>
+          No projects yet. Click "+ New Project" to create one.
         </div>
       )}
     </div>

@@ -590,7 +590,7 @@ const App: React.FC = () => {
             </button>
           </div>
           <h2 style={{ margin: 0 }}>
-            {projectName ? `${projectName} - Hill Chart` : "Team Hill Chart (local prototype)"}
+            {selectedProjectId && projectName ? `${projectName} - Hill Chart` : "Team Hill Chart (local prototype)"}
             {currentDate && (
               <span style={{ fontSize: 16, fontWeight: "normal", color: "#6b7280", marginLeft: 8 }}>
                 {formatDateForDisplay(currentDate)}
@@ -762,17 +762,6 @@ const App: React.FC = () => {
               )}
             </tbody>
           </table>
-        </div>
-
-        <div style={{ flex: 1 }}>
-          <h3 style={{ marginBottom: 8 }}>How to use</h3>
-          <ol style={{ fontSize: 13, color: "#4b5563", paddingLeft: 18 }}>
-            <li>Select or create a project to get started.</li>
-            <li>Click "Upload JSON File" to upload and load scopes from a JSON file.</li>
-            <li>Drag dots along the hill to update their position.</li>
-            <li>Click "Save to Firestore" to save your changes to the cloud.</li>
-            <li>Use "Add Epic" to manually add additional scopes.</li>
-          </ol>
         </div>
       </div>
     </div>
