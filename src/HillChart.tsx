@@ -78,11 +78,19 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX }) => {
     (event: MouseEvent) => {
       if (!draggingKey || !svgRef.current) return;
 
-      const rect = svgRef.current.getBoundingClientRect();
-      const relativeX = event.clientX - rect.left;
-
+      // Convert screen coordinates to SVG coordinates to handle scaling
+      const svg = svgRef.current;
+      const point = svg.createSVGPoint();
+      point.x = event.clientX;
+      point.y = event.clientY;
+      
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      
+      const svgPoint = point.matrixTransform(ctm.inverse());
+      
       const hillWidth = HILL_WIDTH - 2 * MARGIN_X;
-      let t = (relativeX - MARGIN_X) / hillWidth;
+      let t = (svgPoint.x - MARGIN_X) / hillWidth;
       t = Math.max(0, Math.min(1, t));
       const x = t * 100;
 
@@ -157,14 +165,42 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX }) => {
         const textLines = wrapText(epic.title, 18);
         const lineHeight = 14;
         const labelY = svgY - 20 - (textLines.length - 1) * (lineHeight / 2);
+        
+        // Calculate background box dimensions
+        const longestLine = textLines.reduce((a, b) => a.length > b.length ? a : b, "");
+        const estimatedCharWidth = 6.5; // Approximate width per character at 11px font
+        const textWidth = longestLine.length * estimatedCharWidth;
+        const textHeight = textLines.length * lineHeight;
+        const paddingX = 6;
+        const paddingY = 4;
+        const boxWidth = textWidth + paddingX * 2;
+        const boxHeight = textHeight + paddingY * 2;
+        const boxX = svgX - boxWidth / 2;
+        const boxY = labelY - lineHeight + 2 - paddingY; // Adjust for text baseline
 
         return (
           <g
             key={epic.key}
-            onMouseDown={() => setDraggingKey(epic.key)}
-            style={{ cursor: "grab" }}
+            onMouseDown={(e) => {
+              e.preventDefault(); // Prevent text selection while dragging
+              setDraggingKey(epic.key);
+            }}
+            style={{ cursor: draggingKey === epic.key ? "grabbing" : "grab" }}
           >
             <circle cx={svgX} cy={svgY} r={10} fill={color} stroke={theme === 'dark' ? '#f9fafb' : '#1f2933'} strokeWidth={1.5} />
+            {/* Semi-opaque background for text */}
+            <rect
+              x={boxX}
+              y={boxY}
+              width={boxWidth}
+              height={boxHeight}
+              rx={4}
+              ry={4}
+              fill={theme === 'dark' ? 'rgba(17, 24, 39, 0.85)' : 'rgba(255, 255, 255, 0.9)'}
+              stroke={theme === 'dark' ? 'rgba(75, 85, 99, 0.5)' : 'rgba(209, 213, 219, 0.7)'}
+              strokeWidth={1}
+              style={{ pointerEvents: "none" }}
+            />
             <text
               x={svgX}
               y={labelY}

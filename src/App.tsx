@@ -77,11 +77,17 @@ function formatDateForFilename(date: Date): string {
 }
 
 function formatDateForDisplay(date: Date): string {
-  return date.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  // Use UTC methods to avoid timezone conversion issues
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+  
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  
+  return `${monthNames[month]} ${day}, ${year}`;
 }
 
 function parseSnapshotIdToDate(snapshotId: string): Date | null {
@@ -199,8 +205,14 @@ const App: React.FC = () => {
             const parsedDate = new Date(data.generated);
             if (!isNaN(parsedDate.getTime())) {
               setCurrentDate(parsedDate);
+            } else {
+              setCurrentDate(null);
             }
+          } else {
+            setCurrentDate(null);
           }
+        } else {
+          setCurrentDate(null);
         }
         setIsModified(false); // Reset modification flag when loading data
       });
@@ -223,13 +235,18 @@ const App: React.FC = () => {
             const convertedEpics = convertScopesToEpics(snapshotData.scopes);
             setEpics(convertedEpics);
             setProjectName(snapshotData.project || currentProjectName || null);
-            const parsedSnapshotDate =
-              parseSnapshotIdToDate(snapshot.id) ||
-              (snapshotData.generated ? new Date(snapshotData.generated) : null);
+            // Always prioritize the snapshot ID date, as it contains the timestamp
+            const parsedSnapshotDate = parseSnapshotIdToDate(snapshot.id);
             if (parsedSnapshotDate && !isNaN(parsedSnapshotDate.getTime())) {
               setCurrentDate(parsedSnapshotDate);
             } else {
-              setCurrentDate(null);
+              // Fallback to generated field if snapshot ID doesn't contain date
+              const fallbackDate = snapshotData.generated ? new Date(snapshotData.generated) : null;
+              if (fallbackDate && !isNaN(fallbackDate.getTime())) {
+                setCurrentDate(fallbackDate);
+              } else {
+                setCurrentDate(null);
+              }
             }
           } else {
             setEpics([]);
@@ -249,7 +266,11 @@ const App: React.FC = () => {
               const parsedDate = new Date(data.generated);
               if (!isNaN(parsedDate.getTime())) {
                 setCurrentDate(parsedDate);
+              } else {
+                setCurrentDate(null);
               }
+            } else {
+              setCurrentDate(null);
             }
           } else {
             setEpics([]);
@@ -351,11 +372,18 @@ const App: React.FC = () => {
         const convertedEpics = convertScopesToEpics(snapshotData.scopes);
         setEpics(convertedEpics);
         setProjectName(snapshotData.project || selectedProjectName || projectName || null);
-        const parsedSnapshotDate =
-          parseSnapshotIdToDate(snapshot.id) ||
-          (snapshotData.generated ? new Date(snapshotData.generated) : null);
+        // Always prioritize the snapshot ID date, as it contains the timestamp
+        const parsedSnapshotDate = parseSnapshotIdToDate(snapshot.id);
         if (parsedSnapshotDate && !isNaN(parsedSnapshotDate.getTime())) {
           setCurrentDate(parsedSnapshotDate);
+        } else {
+          // Fallback to generated field if snapshot ID doesn't contain date
+          const fallbackDate = snapshotData.generated ? new Date(snapshotData.generated) : null;
+          if (fallbackDate && !isNaN(fallbackDate.getTime())) {
+            setCurrentDate(fallbackDate);
+          } else {
+            setCurrentDate(null);
+          }
         }
       }
       setCurrentSnapshotIndex(index);
@@ -546,6 +574,39 @@ const App: React.FC = () => {
     setSelectedProjectId(project.id);
   };
 
+  const handleClear = () => {
+    // Clear localStorage
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // ignore errors
+      }
+    }
+    
+    // Reset to default placeholder epics (new user state)
+    const defaultEpics: EpicDot[] = [
+      { key: "SCOPE-101", title: "Mobile onboarding revamp", x: 10 },
+      { key: "SCOPE-102", title: "Teacher messaging improvements", x: 35 },
+      { key: "SCOPE-103", title: "Notifications reliability", x: 65 },
+    ];
+    
+    // Reset all state to fresh state
+    setSelectedProjectId(null);
+    setSelectedProjectName(null);
+    setEpics(defaultEpics);
+    setProjectName(null);
+    setCurrentDate(null);
+    setHasPreviousDay(false);
+    setHasNextDay(false);
+    setProjectSnapshots([]);
+    setCurrentSnapshotIndex(null);
+    setIsModified(false);
+    setEditingField(null);
+    setEditValue("");
+    setNewlyAddedScopes(new Set());
+  };
+
   const handleSaveToFirestore = async () => {
     if (!selectedProjectId) {
       setToast({
@@ -641,6 +702,7 @@ const App: React.FC = () => {
         selectedProjectId={selectedProjectId}
         onProjectSelect={handleProjectSelect}
         onProjectCreated={handleProjectCreated}
+        onClear={handleClear}
       />
       
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -697,8 +759,8 @@ const App: React.FC = () => {
       <p style={{ marginBottom: 16, color: colors.textSecondary }}>
         Drag dots along the hill to reflect where each scope is. 
         {selectedProjectId 
-          ? " Click 'Save to Firestore' to save your changes." 
-          : " Positions are saved locally. Select a project to save to Firestore."}
+          ? " Click 'Save' to save your changes." 
+          : " Positions are saved locally. Select a project to save."}
       </p>
 
       <div style={{ backgroundColor: colors.bgPrimary }}>
@@ -750,8 +812,8 @@ const App: React.FC = () => {
                   gap: 6,
                 }}
               >
-                <span>⌄</span>
-                <span>{isSaving ? "Saving..." : "Save to Firestore"}</span>
+                <span>☁</span>
+                <span>{isSaving ? "Saving..." : "Save"}</span>
               </button>
             )}
           </div>

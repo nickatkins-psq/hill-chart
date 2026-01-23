@@ -7,12 +7,14 @@ interface ProjectSelectorProps {
   selectedProjectId: string | null;
   onProjectSelect: (projectId: string | null) => void;
   onProjectCreated: (project: Project) => void;
+  onClear: () => void;
 }
 
 const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   selectedProjectId,
   onProjectSelect,
   onProjectCreated,
+  onClear,
 }) => {
   const { theme } = useTheme();
   const colors = getThemeColors(theme === 'dark');
@@ -126,7 +128,23 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             </option>
           ))}
         </select>
-        
+        <button
+          type="button"
+          onClick={onClear}
+          disabled={isLoading}
+          style={{
+            padding: '6px 12px',
+            borderRadius: 4,
+            border: `1px solid ${colors.borderSecondary}`,
+            background: colors.buttonBg,
+            color: colors.buttonText,
+            fontSize: 13,
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            opacity: isLoading ? 0.6 : 1,
+          }}
+        >
+          Reset
+        </button>
       </div>
 
       {showCreateForm && (
