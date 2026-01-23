@@ -35,6 +35,7 @@ import {
   getInputStyles,
   getNavButtonStyles,
 } from "./utils/uiStyles";
+import { useAuth } from "./contexts/AuthContext";
 
 const STORAGE_KEY = "hillChartEpics_v1";
 const SELECTED_PROJECT_KEY = "hillChartSelectedProject_v1";
@@ -112,6 +113,8 @@ function phaseLabel(phase: HillPhase): string {
 
 const App: React.FC = () => {
   const colors = getThemeColors(false); // Always use light mode
+  const { user, logout } = useAuth();
+  const [profileImageError, setProfileImageError] = useState(false);
   
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => loadSelectedProjectId());
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
@@ -140,6 +143,11 @@ const App: React.FC = () => {
   const [newlyAddedScopes, setNewlyAddedScopes] = useState<Set<string>>(new Set());
   // Store original epic positions for reset functionality
   const [originalEpics, setOriginalEpics] = useState<EpicDot[]>(() => loadInitialEpics());
+
+  // Reset profile image error when user changes
+  useEffect(() => {
+    setProfileImageError(false);
+  }, [user?.uid]);
 
   // Helper function to set project data state
   const setProjectDataState = (
@@ -810,16 +818,74 @@ const App: React.FC = () => {
           color: colors.textPrimary,
         }}
       >
-      {/* Header with logo and title */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-        <img 
-          src="https://img.icons8.com/?size=96&id=3IgibUo37hPA&format=png" 
-          alt="ParentSquare Logo" 
-          style={{ height: 32, width: 32 }}
-        />
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: colors.textPrimary }}>
-           ParentSquare Hill Charts
-        </h1>
+      {/* Header with logo, title, and user info */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <img 
+            src="https://img.icons8.com/?size=96&id=3IgibUo37hPA&format=png" 
+            alt="ParentSquare Logo" 
+            style={{ height: 32, width: 32 }}
+          />
+          <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, color: colors.textPrimary }}>
+             ParentSquare Hill Charts
+          </h1>
+        </div>
+        {user && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {user.photoURL && !profileImageError ? (
+              <img
+                src={user.photoURL}
+                alt={user.displayName || "User"}
+                onError={() => {
+                  setProfileImageError(true);
+                }}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: "50%",
+                  border: `1px solid ${colors.borderSecondary}`,
+                  objectFit: "cover",
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: "50%",
+                  border: `1px solid ${colors.borderSecondary}`,
+                  backgroundColor: colors.bgSecondary,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: colors.textSecondary,
+                }}
+              >
+                {(user.displayName || user.email || "U")[0].toUpperCase()}
+              </div>
+            )}
+            <span style={{ fontSize: 14, color: colors.textSecondary }}>
+              {user.displayName || user.email}
+            </span>
+            <button
+              type="button"
+              onClick={logout}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 4,
+                border: `1px solid ${colors.borderSecondary}`,
+                background: colors.buttonBg,
+                color: colors.textSecondary,
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
       
       <ProjectSelector
