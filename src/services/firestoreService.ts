@@ -510,25 +510,71 @@ service cloud.firestore {
 }
 
 /**
+ * Check if a project name already exists (excluding a specific project ID)
+ */
+export async function projectNameExists(name: string, excludeProjectId?: string): Promise<boolean> {
+  try {
+    const projects = await getProjects();
+    return projects.some(
+      (project) => project.name === name && project.id !== excludeProjectId
+    );
+  } catch (error) {
+    console.error('Error checking project name:', error);
+    // If we can't check, assume it doesn't exist to allow creation
+    return false;
+  }
+}
+
+/**
+ * Find a unique project name by appending numbers if needed
+ * e.g., "New Project", "New Project 1", "New Project 2", etc.
+ */
+export async function findUniqueProjectName(baseName: string, excludeProjectId?: string): Promise<string> {
+  // First check if base name is available
+  if (!(await projectNameExists(baseName, excludeProjectId))) {
+    return baseName;
+  }
+  
+  // Try appending numbers
+  let counter = 1;
+  let candidateName = `${baseName} ${counter}`;
+  
+  while (counter < 1000) { // Safety limit
+    if (!(await projectNameExists(candidateName, excludeProjectId))) {
+      return candidateName;
+    }
+    counter++;
+    candidateName = `${baseName} ${counter}`;
+  }
+  
+  // Fallback: append timestamp if we can't find a unique name
+  return `${baseName} ${Date.now()}`;
+}
+
+/**
  * Create a new project in the hillcharts collection
  * Uses the project name (sanitized) as the document ID
+ * Automatically finds a unique name if the requested name already exists
  */
 export async function createProject(name: string): Promise<Project> {
   try {
+    // Find a unique name if the requested name already exists
+    const uniqueName = await findUniqueProjectName(name);
+    
     const hillchartsRef = collection(db, HILLCHARTS_COLLECTION);
-    const projectId = await generateUniqueProjectId(name);
+    const projectId = await generateUniqueProjectId(uniqueName);
     const newProjectRef = doc(hillchartsRef, projectId);
     const now = Timestamp.now();
     
     // Check if document already exists (shouldn't happen with generateUniqueProjectId, but double-check)
     const existingDoc = await getDoc(newProjectRef);
     if (existingDoc.exists()) {
-      throw new Error(`Project with name "${name}" already exists`);
+      throw new Error(`Project with name "${uniqueName}" already exists`);
     }
     
     // Create initial project data structure
     const initialProjectData: ProjectData = {
-      project: name,
+      project: uniqueName,
       generated: now.toDate().toISOString(),
       task_completion: {
         completed: 0,
@@ -545,7 +591,7 @@ export async function createProject(name: string): Promise<Project> {
     
     return {
       id: projectId,
-      name,
+      name: uniqueName,
       createdAt: now.toDate(),
       updatedAt: now.toDate(),
     };
@@ -688,9 +734,19 @@ export async function deleteSnapshot(projectId: string, snapshotId: string): Pro
 
 /**
  * Delete a project from the hillcharts collection
+ * Also deletes all snapshots in the project's snapshots subcollection
  */
 export async function deleteProject(projectId: string): Promise<void> {
   try {
+    // First, delete all snapshots in the subcollection
+    const snapshotsRef = collection(db, HILLCHARTS_COLLECTION, projectId, 'snapshots');
+    const snapshotsSnap = await getDocs(snapshotsRef);
+    
+    // Delete all snapshot documents
+    const deletePromises = snapshotsSnap.docs.map((docSnap) => deleteDoc(docSnap.ref));
+    await Promise.all(deletePromises);
+    
+    // Then delete the project document itself
     const projectRef = doc(db, HILLCHARTS_COLLECTION, projectId);
     await deleteDoc(projectRef);
   } catch (error) {

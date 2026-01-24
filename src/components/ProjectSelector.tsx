@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { getProjects, createProject, testFirestoreAccess, testSnapshotDiscovery, type Project } from '../services/firestoreService';
+import { getProjects, createProject, deleteProject, testFirestoreAccess, testSnapshotDiscovery, type Project } from '../services/firestoreService';
 import { getThemeColors } from '../utils/themeColors';
 
 interface ProjectSelectorProps {
@@ -24,6 +24,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -66,6 +67,39 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     }
   };
 
+  const handleDeleteProject = async (projectId: string, projectName: string) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${projectName}"? This will permanently delete the project and all its snapshots. This action cannot be undone.`
+    );
+    
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setError(null);
+    try {
+      await deleteProject(projectId);
+      
+      // Remove from local state
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      
+      // If the deleted project was selected, clear selection
+      if (selectedProjectId === projectId) {
+        onProjectSelect(null);
+      }
+      
+      // Reload projects to ensure consistency
+      await loadProjects();
+    } catch (error) {
+      console.error('Error deleting project:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setError(`Failed to delete project: ${errorMessage}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div style={{ marginBottom: 24, color: colors.textPrimary }}>
       {error && !isLoading && (
@@ -91,15 +125,15 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             const value = e.target.value;
             onProjectSelect(value || null);
           }}
-          disabled={isLoading || !!error}
+          disabled={isLoading || !!error || isDeleting}
           style={{
             padding: '6px 12px',
             borderRadius: 4,
             border: `1px solid ${colors.selectBorder}`,
             fontSize: 14,
             minWidth: 200,
-            backgroundColor: isLoading || error ? colors.bgTertiary : colors.selectBg,
-            cursor: isLoading || error ? 'not-allowed' : 'pointer',
+            backgroundColor: isLoading || error || isDeleting ? colors.bgTertiary : colors.selectBg,
+            cursor: isLoading || error || isDeleting ? 'not-allowed' : 'pointer',
             color: isLoading ? colors.selectTextPlaceholder : (selectedProjectId ? colors.selectText : colors.selectTextPlaceholder),
           }}
         >
@@ -120,6 +154,32 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             </>
           )}
         </select>
+        {selectedProjectId && !isLoading && (
+          <button
+            type="button"
+            onClick={() => {
+              const project = projects.find((p) => p.id === selectedProjectId);
+              if (project) {
+                handleDeleteProject(project.id, project.name);
+              }
+            }}
+            disabled={isDeleting || isLoading}
+            title="Delete selected project"
+            style={{
+              padding: '6px 12px',
+              borderRadius: 4,
+              border: `1px solid ${colors.errorBorder || '#dc3545'}`,
+              background: colors.errorBg || '#f8d7da',
+              color: colors.errorText || '#dc3545',
+              fontSize: 13,
+              cursor: isDeleting || isLoading ? 'not-allowed' : 'pointer',
+              opacity: isDeleting || isLoading ? 0.6 : 1,
+              fontWeight: 500,
+            }}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </button>
+        )}
         <button
           type="button"
           onClick={loadProjects}

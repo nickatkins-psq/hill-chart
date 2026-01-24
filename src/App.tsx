@@ -13,6 +13,7 @@ import {
   saveProjectSnapshot,
   updateProjectSnapshot,
   deleteSnapshot,
+  projectNameExists,
   type Project,
   type ProjectData,
   type ProjectSnapshotMeta,
@@ -86,7 +87,37 @@ function loadInitialEpics(): EpicDot[] {
   return DEFAULT_EPICS;
 }
 
+/**
+ * Extract project slug from URL path
+ * Supports formats: /project/{slug} or /{slug}
+ */
+function getProjectSlugFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const path = window.location.pathname;
+  // Match /project/{slug} or /{slug} (but not just /)
+  const match = path.match(/^\/(?:project\/)?([^\/]+)$/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Update URL to reflect selected project
+ */
+function updateUrlForProject(projectId: string | null) {
+  if (typeof window === "undefined") return;
+  const newPath = projectId ? `/project/${projectId}` : "/";
+  if (window.location.pathname !== newPath) {
+    window.history.pushState({ projectId }, "", newPath);
+  }
+}
+
 function loadSelectedProjectId(): string | null {
+  // First, try to get from URL
+  const urlSlug = getProjectSlugFromUrl();
+  if (urlSlug) {
+    return urlSlug;
+  }
+  
+  // Fallback to localStorage for backward compatibility
   if (typeof window !== "undefined") {
     try {
       const projectId = window.localStorage.getItem(SELECTED_PROJECT_KEY);
@@ -151,6 +182,40 @@ const App: React.FC = () => {
   useEffect(() => {
     setProfileImageError(false);
   }, [user?.uid]);
+
+  // Sync URL when project is loaded from localStorage on initial mount
+  useEffect(() => {
+    const urlSlug = getProjectSlugFromUrl();
+    // If we have a project ID but URL doesn't match, update URL
+    if (selectedProjectId && urlSlug !== selectedProjectId) {
+      updateUrlForProject(selectedProjectId);
+    }
+  }, []); // Only run on mount
+
+  // Handle browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const urlSlug = getProjectSlugFromUrl();
+      if (urlSlug !== selectedProjectId) {
+        setSelectedProjectId(urlSlug);
+        // Update localStorage for backward compatibility
+        if (typeof window !== "undefined") {
+          try {
+            if (urlSlug) {
+              window.localStorage.setItem(SELECTED_PROJECT_KEY, urlSlug);
+            } else {
+              window.localStorage.removeItem(SELECTED_PROJECT_KEY);
+            }
+          } catch {
+            // ignore write errors
+          }
+        }
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [selectedProjectId]);
 
   // Helper function to set project data state
   const setProjectDataState = (
@@ -565,7 +630,9 @@ const App: React.FC = () => {
 
   const handleProjectSelect = (projectId: string | null) => {
     setSelectedProjectId(projectId);
-    // Save selected project to localStorage
+    // Update URL
+    updateUrlForProject(projectId);
+    // Save selected project to localStorage for backward compatibility
     if (typeof window !== "undefined") {
       try {
         if (projectId) {
@@ -589,7 +656,9 @@ const App: React.FC = () => {
     setSelectedProjectName(project.name);
     setSelectedProjectId(project.id);
     setProjectName(project.name);
-    // Save selected project to localStorage
+    // Update URL
+    updateUrlForProject(project.id);
+    // Save selected project to localStorage for backward compatibility
     if (typeof window !== "undefined") {
       try {
         window.localStorage.setItem(SELECTED_PROJECT_KEY, project.id);
@@ -625,6 +694,8 @@ const App: React.FC = () => {
     setEditingField(null);
     setEditValue("");
     setNewlyAddedScopes(new Set());
+    // Update URL to root
+    updateUrlForProject(null);
   };
 
   const handleSaveToFirestore = async () => {
@@ -926,19 +997,41 @@ const App: React.FC = () => {
               type="text"
               value={editingTitleValue}
               onChange={(e) => setEditingTitleValue(e.target.value)}
-              onBlur={() => {
-                if (editingTitleValue.trim()) {
-                  setProjectName(editingTitleValue.trim());
-                  setSelectedProjectName(editingTitleValue.trim());
+              onBlur={async () => {
+                const trimmedName = editingTitleValue.trim();
+                if (trimmedName) {
+                  // Check if name already exists (excluding current project)
+                  const nameExists = await projectNameExists(trimmedName, selectedProjectId);
+                  if (nameExists) {
+                    setToast({
+                      message: `A project named "${trimmedName}" already exists. Please choose a different name.`,
+                      type: 'error',
+                    });
+                    setIsEditingTitle(false);
+                    return;
+                  }
+                  setProjectName(trimmedName);
+                  setSelectedProjectName(trimmedName);
                   setIsModified(true);
                 }
                 setIsEditingTitle(false);
               }}
-              onKeyDown={(e) => {
+              onKeyDown={async (e) => {
                 if (e.key === "Enter") {
-                  if (editingTitleValue.trim()) {
-                    setProjectName(editingTitleValue.trim());
-                    setSelectedProjectName(editingTitleValue.trim());
+                  const trimmedName = editingTitleValue.trim();
+                  if (trimmedName) {
+                    // Check if name already exists (excluding current project)
+                    const nameExists = await projectNameExists(trimmedName, selectedProjectId);
+                    if (nameExists) {
+                      setToast({
+                        message: `A project named "${trimmedName}" already exists. Please choose a different name.`,
+                        type: 'error',
+                      });
+                      setIsEditingTitle(false);
+                      return;
+                    }
+                    setProjectName(trimmedName);
+                    setSelectedProjectName(trimmedName);
                     setIsModified(true);
                   }
                   setIsEditingTitle(false);
@@ -975,7 +1068,7 @@ const App: React.FC = () => {
               }}
               title={selectedProjectId ? "Click to edit title" : undefined}
             >
-              {selectedProjectId && projectName ? projectName : "Team"}
+              {selectedProjectId && projectName ? projectName : "New Project"}
             </h2>
           )}
         </div>
@@ -1032,7 +1125,7 @@ const App: React.FC = () => {
         <HillChart 
           epics={epics} 
           onUpdateEpicX={handleUpdateEpicX}
-          title={selectedProjectId && projectName ? projectName : "Team"}
+          title={selectedProjectId && projectName ? projectName : "New Project"}
           date={currentDate}
         />
       </div>
