@@ -755,63 +755,27 @@ const App: React.FC = () => {
 
     setIsLoading(true);
     try {
-      // Update the project name (this may change the project ID if slug changes)
-      const newProjectId = await updateProjectName(selectedProjectId, trimmedName);
+      // Update the project name (slug stays the same)
+      await updateProjectName(selectedProjectId, trimmedName);
       
       // Update local state
       setProjectName(trimmedName);
       setSelectedProjectName(trimmedName);
       
-      // If the project ID changed (slug changed), update selection and URL
-      if (newProjectId !== selectedProjectId) {
-        setSelectedProjectId(newProjectId);
-        updateUrlForProject(newProjectId);
-        
-        // Update localStorage
-        if (typeof window !== "undefined") {
-          try {
-            window.localStorage.setItem(SELECTED_PROJECT_KEY, newProjectId);
-          } catch {
-            // ignore write errors
-          }
-        }
-        
-        // Reload snapshots for the new project ID
-        const snapshots = await getProjectSnapshots(newProjectId);
-        setProjectSnapshots(snapshots);
-        if (snapshots.length > 0) {
-          const lastIndex = snapshots.length - 1;
-          const snapshot = snapshots[lastIndex];
-          setCurrentSnapshotIndex(lastIndex);
-          const snapshotData = await getProjectSnapshotData(newProjectId, snapshot.id);
-          if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
-            const convertedEpics = convertScopesToEpics(snapshotData.scopes);
-            const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
-            setProjectDataState(
-              convertedEpics,
-              snapshotData.project || trimmedName || null,
-              date
-            );
-          }
-          setHasPreviousDay(lastIndex > 0);
-          setHasNextDay(false);
-        }
-      } else {
-        // Just reload snapshots to ensure they have the updated name
-        const snapshots = await getProjectSnapshots(selectedProjectId);
-        setProjectSnapshots(snapshots);
-        if (snapshots.length > 0 && currentSnapshotIndex !== null) {
-          const snapshot = snapshots[currentSnapshotIndex];
-          const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
-          if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
-            const convertedEpics = convertScopesToEpics(snapshotData.scopes);
-            const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
-            setProjectDataState(
-              convertedEpics,
-              snapshotData.project || trimmedName || null,
-              date
-            );
-          }
+      // Reload snapshots to ensure they have the updated name
+      const snapshots = await getProjectSnapshots(selectedProjectId);
+      setProjectSnapshots(snapshots);
+      if (snapshots.length > 0 && currentSnapshotIndex !== null) {
+        const snapshot = snapshots[currentSnapshotIndex];
+        const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+        if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
+          const convertedEpics = convertScopesToEpics(snapshotData.scopes);
+          const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
+          setProjectDataState(
+            convertedEpics,
+            snapshotData.project || trimmedName || null,
+            date
+          );
         }
       }
       
