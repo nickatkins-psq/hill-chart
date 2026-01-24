@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { getProjects, createProject, deleteProject, testFirestoreAccess, testSnapshotDiscovery, type Project } from '../services/firestoreService';
+import { getProjects, createProject, deleteProject, testFirestoreAccess, testSnapshotDiscovery, canUserEditProject, type Project } from '../services/firestoreService';
 import { getThemeColors } from '../utils/themeColors';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ProjectSelectorProps {
   selectedProjectId: string | null;
@@ -24,6 +25,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   reloadTrigger,
 }) => {
   const colors = getThemeColors(false); // Always use light mode
+  const { user } = useAuth();
   
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -70,7 +72,8 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const handleCreateProject = async () => {
     setIsCreating(true);
     try {
-      const newProject = await createProject('New Project');
+      const ownerId = user?.uid || null;
+      const newProject = await createProject('New Project', ownerId);
       setProjects((prev) => [newProject, ...prev]);
       onProjectCreated(newProject);
       onProjectSelect(newProject.id);
@@ -83,6 +86,13 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   };
 
   const handleDeleteProject = async (projectId: string, projectName: string) => {
+    // Check if user can edit this project
+    const project = projects.find((p) => p.id === projectId);
+    if (!canUserEditProject(project || null, user?.uid || null)) {
+      setError("You don't have permission to delete this project. Only the project creator can delete it.");
+      return;
+    }
+
     const confirmed = window.confirm(
       `Are you sure you want to delete "${projectName}"? This will permanently delete the project and all its snapshots. This action cannot be undone.`
     );

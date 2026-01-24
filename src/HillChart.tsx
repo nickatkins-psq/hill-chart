@@ -559,7 +559,8 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX, title, date
               stroke="rgba(209, 213, 219, 0.7)"
               strokeWidth={1}
               style={{ 
-                pointerEvents: "none",
+                pointerEvents: "auto",
+                cursor: draggingKey === epic.key ? "grabbing" : "grab",
                 userSelect: "none",
                 WebkitUserSelect: "none",
                 MozUserSelect: "none",
@@ -574,7 +575,8 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX, title, date
               fill={colors.chartText}
               fontWeight="500"
               style={{ 
-                pointerEvents: "none",
+                pointerEvents: "auto",
+                cursor: draggingKey === epic.key ? "grabbing" : "grab",
                 userSelect: "none",
                 WebkitUserSelect: "none",
                 MozUserSelect: "none",

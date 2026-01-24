@@ -15,6 +15,9 @@ import {
   deleteSnapshot,
   projectNameExists,
   updateProjectName,
+  getProjectMetadata,
+  canUserEditProject,
+  getProjects,
   type Project,
   type ProjectData,
   type ProjectSnapshotMeta,
@@ -24,6 +27,7 @@ import {
   formatDateForFilename,
   normalizeDate,
   parseSnapshotDate,
+  formatDateWithTime,
 } from "./utils/dateUtils";
 import {
   convertScopesToEpics,
@@ -150,6 +154,7 @@ const App: React.FC = () => {
   
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => loadSelectedProjectId());
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [epics, setEpics] = useState<EpicDot[]>(() => loadInitialEpics());
   const [projectName, setProjectName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -236,6 +241,7 @@ const App: React.FC = () => {
   // Load project data from Firestore when project is selected
   useEffect(() => {
     if (!selectedProjectId) {
+      setSelectedProject(null);
       // If no project selected, try to load from local file (backward compatibility)
       loadHillChartData().then((data) => {
         if (data && data.scopes.length > 0) {
@@ -262,11 +268,16 @@ const App: React.FC = () => {
       return;
     }
 
-    // Load from Firestore (snapshots)
+    // Load project metadata and snapshots
     setIsLoading(true);
     const currentProjectName = selectedProjectName;
     const loadSnapshots = async () => {
       try {
+        // Load project metadata to check ownership
+        const projects = await getProjects();
+        const project = projects.find((p) => p.id === selectedProjectId);
+        setSelectedProject(project || null);
+        
         const snapshots = await getProjectSnapshots(selectedProjectId);
         setProjectSnapshots(snapshots);
         if (snapshots.length > 0) {
@@ -443,6 +454,14 @@ const App: React.FC = () => {
   }, [epics]);
 
   const handleUpdateEpicX = (key: string, x: number) => {
+    // Check if user can edit this project before allowing drag
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to edit this project. Only the project creator can edit it.",
+        type: 'error',
+      });
+      return;
+    }
     setEpics((prev) => prev.map((e) => (e.key === key ? { ...e, x } : e)));
     setIsModified(true); // Mark as modified when dragging
   };
@@ -460,6 +479,15 @@ const App: React.FC = () => {
 
 
   const handleRemoveEpic = async (key: string) => {
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to edit this project. Only the project creator can edit it.",
+        type: 'error',
+      });
+      return;
+    }
+
     if (!window.confirm(`Remove ${key} from this hill?`)) return;
     setEpics((prev) => {
       const updated = prev.filter((e) => e.key !== key);
@@ -478,6 +506,15 @@ const App: React.FC = () => {
   };
 
   const handleAddScope = async () => {
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to edit this project. Only the project creator can edit it.",
+        type: 'error',
+      });
+      return;
+    }
+
     const newScopeNumber = getNextScopeNumber(epics);
     const newKey = `SCOPE-${newScopeNumber}`;
     const newEpic: EpicDot = {
@@ -497,6 +534,15 @@ const App: React.FC = () => {
   };
 
   const handleStartEdit = (field: "key" | "title", epicKey: string, currentValue: string) => {
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to edit this project. Only the project creator can edit it.",
+        type: 'error',
+      });
+      return;
+    }
+
     setEditingField(`${field}-${epicKey}`);
     setEditValue(currentValue);
     setOriginalEditValue(currentValue); // Store original value for cancel
@@ -676,6 +722,15 @@ const App: React.FC = () => {
       return;
     }
 
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to edit this project. Only the project creator can edit it.",
+        type: 'error',
+      });
+      return false;
+    }
+
     const trimmedName = newName.trim();
     
     // Check if name already exists (excluding current project)
@@ -811,6 +866,15 @@ const App: React.FC = () => {
       return;
     }
 
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to edit this project. Only the project creator can edit it.",
+        type: 'error',
+      });
+      return;
+    }
+
     if (epics.length === 0) {
       setToast({
         message: "No scopes to save. Add at least one scope before saving.",
@@ -872,6 +936,11 @@ const App: React.FC = () => {
       return;
     }
 
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      return; // Silently fail - user shouldn't be able to edit anyway
+    }
+
     // Use provided epics or current state
     const epicsToUse = epicsToSave || epics;
 
@@ -918,6 +987,15 @@ const App: React.FC = () => {
     
     if (!selectedProjectId || currentSnapshotIndex === null || !projectSnapshots[currentSnapshotIndex]) {
       console.warn("Cannot delete: missing project ID or snapshot index");
+      return;
+    }
+
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to delete snapshots from this project. Only the project creator can delete them.",
+        type: 'error',
+      });
       return;
     }
 
@@ -1156,21 +1234,36 @@ const App: React.FC = () => {
               style={{
                 margin: 0,
                 color: colors.textPrimary,
-                cursor: selectedProjectId ? "pointer" : "default",
+                cursor: selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) ? "pointer" : "default",
               }}
               onClick={() => {
-                if (selectedProjectId) {
+                if (selectedProjectId && canUserEditProject(selectedProject, user?.uid || null)) {
                   setEditingTitleValue(projectName || "New Project");
                   setIsEditingTitle(true);
+                } else if (selectedProjectId) {
+                  setToast({
+                    message: "You don't have permission to edit this project. Only the project creator can edit it.",
+                    type: 'error',
+                  });
                 }
               }}
-              title={selectedProjectId ? "Click to edit title" : undefined}
+              title={selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) ? "Click to edit title" : selectedProjectId ? "Only the project creator can edit this project" : undefined}
             >
               {selectedProjectId && projectName ? projectName : "New Project"}
+              {currentDate && (
+                <span style={{ 
+                  fontSize: "0.6em", 
+                  fontWeight: "normal", 
+                  color: colors.textSecondary,
+                  marginLeft: 8
+                }}>
+                  on {formatDateWithTime(currentDate)}
+                </span>
+              )}
             </h2>
           )}
         </div>
-        {selectedProjectId && currentSnapshotIndex !== null && !isModified && (
+        {selectedProjectId && currentSnapshotIndex !== null && !isModified && canUserEditProject(selectedProject, user?.uid || null) && (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
               type="button"
@@ -1186,7 +1279,7 @@ const App: React.FC = () => {
             </button>
           </div>
         )}
-        {isModified && selectedProjectId && (
+        {isModified && selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) && (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
               type="button"
@@ -1217,6 +1310,11 @@ const App: React.FC = () => {
             </button>
           </div>
         )}
+        {selectedProjectId && !canUserEditProject(selectedProject, user?.uid || null) && (
+          <div style={{ fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' }}>
+            Read-only: Only the project creator can edit this project
+          </div>
+        )}
       </div>
 
       <div style={{ backgroundColor: colors.bgPrimary }}>
@@ -1232,18 +1330,20 @@ const App: React.FC = () => {
         <div style={{ flex: 2 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <h3 style={{ margin: 0, color: colors.textPrimary }}>Scopes on this hill</h3>
-            <button
-              type="button"
-              onClick={handleAddScope}
-              disabled={isLoading}
-              style={getButtonStyles(colors, {
-                variant: "info",
-                disabled: isLoading,
-              })}
-            >
-              <span>+</span>
-              <span>Add Scope</span>
-            </button>
+            {canUserEditProject(selectedProject, user?.uid || null) && (
+              <button
+                type="button"
+                onClick={handleAddScope}
+                disabled={isLoading}
+                style={getButtonStyles(colors, {
+                  variant: "info",
+                  disabled: isLoading,
+                })}
+              >
+                <span>+</span>
+                <span>Add Scope</span>
+              </button>
+            )}
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>

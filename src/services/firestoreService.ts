@@ -16,6 +16,7 @@ export interface Project {
   name: string;
   createdAt: Date;
   updatedAt: Date;
+  ownerId?: string | null; // User ID of the project creator, null/undefined means no owner (editable by anyone)
 }
 
 export interface ProjectData {
@@ -393,6 +394,7 @@ export async function getProjects(): Promise<Project[]> {
           name: String(projectName).trim() || 'Untitled Project',
           createdAt: generatedDate,
           updatedAt: updatedDate,
+          ownerId: data.ownerId || null, // Read ownerId from document, default to null
         };
         
         console.log(`[getProjects] Mapped to project:`, project);
@@ -400,12 +402,24 @@ export async function getProjects(): Promise<Project[]> {
       } catch (error) {
         console.error(`[getProjects] Error mapping document ${doc.id}:`, error);
         // Return a basic project even if mapping fails
-        return {
-          id: doc.id,
-          name: doc.id || 'Untitled Project',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        };
+        try {
+          const fallbackData = doc.data();
+          return {
+            id: doc.id,
+            name: doc.id || 'Untitled Project',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            ownerId: fallbackData?.ownerId || null,
+          };
+        } catch {
+          return {
+            id: doc.id,
+            name: doc.id || 'Untitled Project',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            ownerId: null,
+          };
+        }
       }
     }).filter((project) => {
       // Filter out any null/undefined projects
@@ -418,20 +432,32 @@ export async function getProjects(): Promise<Project[]> {
       try {
         const snapshotsRef = collectionGroup(db, 'snapshots');
         const snapshotsSnap = await getDocs(snapshotsRef);
-        const snapshotProjects = snapshotsSnap.docs.map((docSnap) => {
+        const snapshotProjects = await Promise.all(snapshotsSnap.docs.map(async (docSnap) => {
           const data = docSnap.data() as Partial<ProjectData>;
           const parts = docSnap.ref.path.split('/');
           const projectIndex = parts.findIndex((p) => p === 'hillcharts');
           const projectId = projectIndex >= 0 ? parts[projectIndex + 1] : docSnap.id;
           const projectName = data.project || projectId;
           const generated = typeof data.generated === 'string' ? new Date(data.generated) : new Date();
+          // Try to get ownerId from the project document
+          let ownerId: string | null = null;
+          try {
+            const projectDocRef = doc(db, HILLCHARTS_COLLECTION, projectId);
+            const projectDocSnap = await getDoc(projectDocRef);
+            if (projectDocSnap.exists()) {
+              ownerId = projectDocSnap.data().ownerId || null;
+            }
+          } catch {
+            // Ignore errors when reading ownerId
+          }
           return {
             id: projectId,
             name: projectName,
             createdAt: generated,
             updatedAt: generated,
+            ownerId,
           } as Project;
-        });
+        }));
         const uniqueById = new Map<string, Project>();
         snapshotProjects.forEach((project) => {
           const existing = uniqueById.get(project.id);
@@ -458,11 +484,23 @@ export async function getProjects(): Promise<Project[]> {
               const firstSnapshot = snapshotsSnap.docs[0].data() as Partial<ProjectData>;
               const projectName = firstSnapshot.project || projectId;
               const generated = typeof firstSnapshot.generated === 'string' ? new Date(firstSnapshot.generated) : new Date();
+              // Try to get ownerId from the project document
+              let ownerId: string | null = null;
+              try {
+                const projectDocRef = doc(db, HILLCHARTS_COLLECTION, projectId);
+                const projectDocSnap = await getDoc(projectDocRef);
+                if (projectDocSnap.exists()) {
+                  ownerId = projectDocSnap.data().ownerId || null;
+                }
+              } catch {
+                // Ignore errors when reading ownerId
+              }
               discoveredProjects.push({
                 id: projectId,
                 name: projectName,
                 createdAt: generated,
                 updatedAt: generated,
+                ownerId,
               });
             }
           } catch (directError) {
@@ -555,8 +593,10 @@ export async function findUniqueProjectName(baseName: string, excludeProjectId?:
  * Create a new project in the hillcharts collection
  * Uses the project name (sanitized) as the document ID
  * Automatically finds a unique name if the requested name already exists
+ * @param name - Project name
+ * @param ownerId - User ID of the project creator (optional)
  */
-export async function createProject(name: string): Promise<Project> {
+export async function createProject(name: string, ownerId?: string | null): Promise<Project> {
   try {
     // Find a unique name if the requested name already exists
     const uniqueName = await findUniqueProjectName(name);
@@ -586,6 +626,7 @@ export async function createProject(name: string): Promise<Project> {
     
     await setDoc(newProjectRef, {
       ...initialProjectData,
+      ownerId: ownerId || null, // Store ownerId, null means no owner (editable by anyone)
       updatedAt: now,
     });
     
@@ -594,6 +635,7 @@ export async function createProject(name: string): Promise<Project> {
       name: uniqueName,
       createdAt: now.toDate(),
       updatedAt: now.toDate(),
+      ownerId: ownerId || null,
     };
   } catch (error) {
     console.error('Error creating project:', error);
@@ -654,13 +696,54 @@ export async function getProjectData(projectId: string): Promise<ProjectData | n
     }
     
     const data = projectDataSnap.data();
-    // Remove updatedAt if present (it's not part of ProjectData interface)
-    const { updatedAt, ...projectData } = data;
+    // Remove updatedAt and ownerId if present (they're not part of ProjectData interface)
+    const { updatedAt, ownerId, ...projectData } = data;
     return projectData as ProjectData;
   } catch (error) {
     console.error('Error getting project data:', error);
     throw error;
   }
+}
+
+/**
+ * Get project metadata including ownership
+ */
+export async function getProjectMetadata(projectId: string): Promise<{ ownerId?: string | null } | null> {
+  try {
+    const projectDataRef = doc(db, HILLCHARTS_COLLECTION, projectId);
+    const projectDataSnap = await getDoc(projectDataRef);
+    
+    if (!projectDataSnap.exists()) {
+      return null;
+    }
+    
+    const data = projectDataSnap.data();
+    return {
+      ownerId: data.ownerId || null,
+    };
+  } catch (error) {
+    console.error('Error getting project metadata:', error);
+    throw error;
+  }
+}
+
+/**
+ * Check if a user can edit a project
+ * Returns true if:
+ * - The project has no owner (ownerId is null/undefined)
+ * - The user is the owner of the project
+ */
+export function canUserEditProject(project: Project | null, userId: string | null | undefined): boolean {
+  if (!project) return false;
+  if (!userId) return false; // Must be logged in
+  
+  // Projects with no owner (null/undefined) are editable by anyone
+  if (!project.ownerId) {
+    return true;
+  }
+  
+  // User must be the owner
+  return project.ownerId === userId;
 }
 
 /**
