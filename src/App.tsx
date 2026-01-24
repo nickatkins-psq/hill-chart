@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import HillChart, {
   type EpicDot,
   type HillPhase,
@@ -15,7 +15,6 @@ import {
   deleteSnapshot,
   projectNameExists,
   updateProjectName,
-  getProjectMetadata,
   canUserEditProject,
   getProjects,
   type Project,
@@ -202,7 +201,7 @@ const App: React.FC = () => {
 
   // Handle browser back/forward navigation
   useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
+    const handlePopState = () => {
       const urlSlug = getProjectSlugFromUrl();
       if (urlSlug !== selectedProjectId) {
         setSelectedProjectId(urlSlug);

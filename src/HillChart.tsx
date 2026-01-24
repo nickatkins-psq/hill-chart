@@ -480,7 +480,7 @@ const HillChart: React.FC<HillChartProps> = ({ epics, onUpdateEpicX, title, date
           const labelData = labelMap.get(epic.key);
           if (!labelData) return null;
           
-          const { svgX, svgY, boxWidth, boxHeight, textLines, lineHeight, labelY, boxY, isBelowDot, isAngled, offsetX, offsetY, isAtClosestPosition } = labelData;
+          const { svgX, svgY, boxWidth, boxHeight, textLines, lineHeight, labelY, boxY, isBelowDot, isAngled, offsetX, isAtClosestPosition } = labelData;
           const phase = computePhase(epic.x);
           const color =
             phase === "UPHILL"
