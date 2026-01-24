@@ -467,13 +467,23 @@ const App: React.FC = () => {
   };
 
   const handleReset = () => {
-    if (originalEpics.length === 0) return;
-    setEpics([...originalEpics]);
-    setIsModified(false);
-    setToast({
-      message: "Chart positions reset to original state",
-      type: 'info',
-    });
+    // If we have original epics, reset to those
+    if (originalEpics.length > 0) {
+      setEpics([...originalEpics]);
+      setIsModified(false);
+      setToast({
+        message: "Chart positions reset to original state",
+        type: 'info',
+      });
+    } else if (epics.length > 0) {
+      // If no original epics but we have current epics, reset to empty
+      setEpics([]);
+      setIsModified(false);
+      setToast({
+        message: "Chart cleared",
+        type: 'info',
+      });
+    }
   };
 
 
@@ -1257,7 +1267,7 @@ const App: React.FC = () => {
                   color: colors.textSecondary,
                   marginLeft: 8
                 }}>
-                  on {formatDateWithTime(currentDate)}
+                  Hill Chart on {formatDateWithTime(currentDate)}
                 </span>
               )}
             </h2>
@@ -1269,13 +1279,31 @@ const App: React.FC = () => {
               type="button"
               onClick={handleDeleteSnapshot}
               disabled={isLoading}
-              style={getButtonStyles(colors, {
-                variant: "danger",
-                disabled: isLoading,
-                height: "32px",
-              })}
+              style={{
+                ...getButtonStyles(colors, {
+                  variant: "danger",
+                  disabled: isLoading,
+                  height: "32px",
+                }),
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
             >
-              <span>Delete snapshot</span>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+              <span>Delete Snapshot</span>
             </button>
           </div>
         )}
@@ -1284,29 +1312,47 @@ const App: React.FC = () => {
             <button
               type="button"
               onClick={handleReset}
-              disabled={isLoading || originalEpics.length === 0}
+              disabled={isLoading || (originalEpics.length === 0 && epics.length === 0)}
               style={getButtonStyles(colors, {
                 variant: "danger",
-                disabled: isLoading || originalEpics.length === 0,
+                disabled: isLoading || (originalEpics.length === 0 && epics.length === 0),
                 height: "32px",
               })}
             >
               <span>↺</span>
-              <span>Reset</span>
+              <span>Undo Changes</span>
             </button>
             <button
               key="save-button"
               type="button"
               onClick={handleSaveToFirestore}
               disabled={isSaving || isLoading}
-              style={getButtonStyles(colors, {
-                variant: "info",
-                disabled: isSaving || isLoading,
-                height: "32px",
-              })}
+              style={{
+                ...getButtonStyles(colors, {
+                  variant: "info",
+                  disabled: isSaving || isLoading,
+                  height: "32px",
+                }),
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
             >
-              <span>☁</span>
-              <span>{isSaving ? "Saving..." : "Save New Snapshot"}</span>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 16v-3.5a5.5 5.5 0 0 0-8-4.93A5.5 5.5 0 0 0 5.5 9L5 9.28a4.5 4.5 0 0 0-2.5 4.22c0 2.5 2 4.5 4.5 4.5h13a3 3 0 0 0 3-3" />
+                <polyline points="16 16 12 12 8 16" />
+                <line x1="12" y1="12" x2="12" y2="21" />
+              </svg>
+              <span>{isSaving ? "Saving..." : "Save Snapshot"}</span>
             </button>
           </div>
         )}
