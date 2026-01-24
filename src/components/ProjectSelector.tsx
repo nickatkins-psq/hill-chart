@@ -9,6 +9,8 @@ interface ProjectSelectorProps {
   onClear: () => void;
   isModified?: boolean;
   onSaveBeforeClear?: () => Promise<void>;
+  onProjectListChange?: () => void;
+  reloadTrigger?: number;
 }
 
 const ProjectSelector: React.FC<ProjectSelectorProps> = ({
@@ -18,6 +20,8 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   onClear,
   isModified = false,
   onSaveBeforeClear,
+  onProjectListChange,
+  reloadTrigger,
 }) => {
   const colors = getThemeColors(false); // Always use light mode
   
@@ -34,6 +38,13 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     testSnapshotDiscovery();
   }, []);
 
+  // Reload projects when reloadTrigger changes
+  useEffect(() => {
+    if (reloadTrigger !== undefined && reloadTrigger > 0) {
+      loadProjects();
+    }
+  }, [reloadTrigger]);
+
   const loadProjects = async () => {
     setIsLoading(true);
     setError(null);
@@ -42,6 +53,10 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       setProjects(projectList);
       if (projectList.length === 0) {
         setError('No projects found. Create a new project to get started.');
+      }
+      // Notify parent that project list changed
+      if (onProjectListChange) {
+        onProjectListChange();
       }
     } catch (error) {
       console.error('Error loading projects:', error);

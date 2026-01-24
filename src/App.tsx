@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import HillChart, {
   type EpicDot,
   type HillPhase,
@@ -14,6 +14,7 @@ import {
   updateProjectSnapshot,
   deleteSnapshot,
   projectNameExists,
+  updateProjectName,
   type Project,
   type ProjectData,
   type ProjectSnapshotMeta,
@@ -177,6 +178,8 @@ const App: React.FC = () => {
   // Track if project title is being edited
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
+  // Trigger for reloading project list
+  const [projectListReloadTrigger, setProjectListReloadTrigger] = useState(0);
 
   // Reset profile image error when user changes
   useEffect(() => {
@@ -668,6 +671,107 @@ const App: React.FC = () => {
     }
   };
 
+  const handleUpdateProjectName = async (newName: string) => {
+    if (!selectedProjectId || !newName.trim()) {
+      return;
+    }
+
+    const trimmedName = newName.trim();
+    
+    // Check if name already exists (excluding current project)
+    const nameExists = await projectNameExists(trimmedName, selectedProjectId);
+    if (nameExists) {
+      setToast({
+        message: `A project named "${trimmedName}" already exists. Please choose a different name.`,
+        type: 'error',
+      });
+      return false;
+    }
+
+    setIsLoading(true);
+    try {
+      // Update the project name (this may change the project ID if slug changes)
+      const newProjectId = await updateProjectName(selectedProjectId, trimmedName);
+      
+      // Update local state
+      setProjectName(trimmedName);
+      setSelectedProjectName(trimmedName);
+      
+      // If the project ID changed (slug changed), update selection and URL
+      if (newProjectId !== selectedProjectId) {
+        setSelectedProjectId(newProjectId);
+        updateUrlForProject(newProjectId);
+        
+        // Update localStorage
+        if (typeof window !== "undefined") {
+          try {
+            window.localStorage.setItem(SELECTED_PROJECT_KEY, newProjectId);
+          } catch {
+            // ignore write errors
+          }
+        }
+        
+        // Reload snapshots for the new project ID
+        const snapshots = await getProjectSnapshots(newProjectId);
+        setProjectSnapshots(snapshots);
+        if (snapshots.length > 0) {
+          const lastIndex = snapshots.length - 1;
+          const snapshot = snapshots[lastIndex];
+          setCurrentSnapshotIndex(lastIndex);
+          const snapshotData = await getProjectSnapshotData(newProjectId, snapshot.id);
+          if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
+            const convertedEpics = convertScopesToEpics(snapshotData.scopes);
+            const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
+            setProjectDataState(
+              convertedEpics,
+              snapshotData.project || trimmedName || null,
+              date
+            );
+          }
+          setHasPreviousDay(lastIndex > 0);
+          setHasNextDay(false);
+        }
+      } else {
+        // Just reload snapshots to ensure they have the updated name
+        const snapshots = await getProjectSnapshots(selectedProjectId);
+        setProjectSnapshots(snapshots);
+        if (snapshots.length > 0 && currentSnapshotIndex !== null) {
+          const snapshot = snapshots[currentSnapshotIndex];
+          const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+          if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
+            const convertedEpics = convertScopesToEpics(snapshotData.scopes);
+            const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
+            setProjectDataState(
+              convertedEpics,
+              snapshotData.project || trimmedName || null,
+              date
+            );
+          }
+        }
+      }
+      
+      setToast({
+        message: "Project name updated successfully.",
+        type: 'success',
+      });
+      
+      // Trigger project list reload
+      setProjectListReloadTrigger((prev) => prev + 1);
+      
+      return true;
+    } catch (error) {
+      console.error('Error updating project name:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setToast({
+        message: `Failed to update project name: ${errorMessage}`,
+        type: 'error',
+      });
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleClear = () => {
     // Clear localStorage
     if (typeof window !== "undefined") {
@@ -970,6 +1074,11 @@ const App: React.FC = () => {
         onClear={handleClear}
         isModified={isModified}
         onSaveBeforeClear={selectedProjectId ? handleSaveToFirestore : undefined}
+        onProjectListChange={async () => {
+          // Project list will be reloaded by ProjectSelector itself
+          // This callback is here for future use if needed
+        }}
+        reloadTrigger={projectListReloadTrigger}
       />
       
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -999,44 +1108,33 @@ const App: React.FC = () => {
               onChange={(e) => setEditingTitleValue(e.target.value)}
               onBlur={async () => {
                 const trimmedName = editingTitleValue.trim();
-                if (trimmedName) {
-                  // Check if name already exists (excluding current project)
-                  const nameExists = await projectNameExists(trimmedName, selectedProjectId);
-                  if (nameExists) {
-                    setToast({
-                      message: `A project named "${trimmedName}" already exists. Please choose a different name.`,
-                      type: 'error',
-                    });
-                    setIsEditingTitle(false);
-                    return;
+                if (trimmedName && trimmedName !== projectName) {
+                  const success = await handleUpdateProjectName(trimmedName);
+                  if (!success) {
+                    // Reset to original name if update failed
+                    setEditingTitleValue(projectName || "");
                   }
-                  setProjectName(trimmedName);
-                  setSelectedProjectName(trimmedName);
-                  setIsModified(true);
                 }
                 setIsEditingTitle(false);
               }}
               onKeyDown={async (e) => {
                 if (e.key === "Enter") {
+                  e.preventDefault();
                   const trimmedName = editingTitleValue.trim();
-                  if (trimmedName) {
-                    // Check if name already exists (excluding current project)
-                    const nameExists = await projectNameExists(trimmedName, selectedProjectId);
-                    if (nameExists) {
-                      setToast({
-                        message: `A project named "${trimmedName}" already exists. Please choose a different name.`,
-                        type: 'error',
-                      });
+                  if (trimmedName && trimmedName !== projectName) {
+                    const success = await handleUpdateProjectName(trimmedName);
+                    if (success) {
                       setIsEditingTitle(false);
-                      return;
+                    } else {
+                      // Reset to original name if update failed
+                      setEditingTitleValue(projectName || "");
                     }
-                    setProjectName(trimmedName);
-                    setSelectedProjectName(trimmedName);
-                    setIsModified(true);
+                  } else {
+                    setIsEditingTitle(false);
                   }
-                  setIsEditingTitle(false);
                 } else if (e.key === "Escape") {
                   setIsEditingTitle(false);
+                  setEditingTitleValue(projectName || "");
                 }
               }}
               autoFocus
@@ -1132,8 +1230,8 @@ const App: React.FC = () => {
 
       <div style={{ marginTop: 24, display: "flex", gap: 24, alignItems: "flex-start" }}>
         <div style={{ flex: 2 }}>
-          <h3 style={{ marginBottom: 8, color: colors.textPrimary }}>Scopes on this hill</h3>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <h3 style={{ margin: 0, color: colors.textPrimary }}>Scopes on this hill</h3>
             <button
               type="button"
               onClick={handleAddScope}

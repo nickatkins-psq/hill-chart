@@ -733,6 +733,104 @@ export async function deleteSnapshot(projectId: string, snapshotId: string): Pro
 }
 
 /**
+ * Update a project's name
+ * If the new name results in a different slug, the project document and all snapshots will be moved to a new document
+ * Returns the new project ID if it changed, or the same ID if it didn't
+ */
+export async function updateProjectName(projectId: string, newName: string): Promise<string> {
+  try {
+    // Check if name already exists (excluding current project)
+    if (await projectNameExists(newName, projectId)) {
+      throw new Error(`A project named "${newName}" already exists. Please choose a different name.`);
+    }
+
+    const newProjectId = await generateUniqueProjectId(newName);
+    
+    // If the slug hasn't changed, just update the project field in the document and snapshots
+    if (newProjectId === projectId) {
+      // Update the project document
+      const projectData = await getProjectData(projectId);
+      if (projectData) {
+        await saveProjectData(projectId, {
+          ...projectData,
+          project: newName,
+        });
+      }
+      
+      // Update all snapshots to have the new project name
+      const snapshots = await getProjectSnapshots(projectId);
+      for (const snapshot of snapshots) {
+        const snapshotData = await getProjectSnapshotData(projectId, snapshot.id);
+        if (snapshotData) {
+          await updateProjectSnapshot(projectId, snapshot.id, {
+            ...snapshotData,
+            project: newName,
+          });
+        }
+      }
+      
+      return projectId;
+    }
+    
+    // Slug changed - need to move everything to a new document
+    // 1. Get all snapshots
+    const snapshots = await getProjectSnapshots(projectId);
+    const snapshotDataPromises = snapshots.map((snapshot) => 
+      getProjectSnapshotData(projectId, snapshot.id)
+    );
+    const allSnapshotData = await Promise.all(snapshotDataPromises);
+    
+    // 2. Get project data
+    const projectData = await getProjectData(projectId);
+    
+    // 3. Create new project document with updated name
+    const now = Timestamp.now();
+    const newProjectRef = doc(db, HILLCHARTS_COLLECTION, newProjectId);
+    const newProjectData: ProjectData = projectData ? {
+      ...projectData,
+      project: newName,
+    } : {
+      project: newName,
+      generated: now.toDate().toISOString(),
+      task_completion: {
+        completed: 0,
+        total: 0,
+        percentage: 0,
+      },
+      scopes: [],
+    };
+    
+    await setDoc(newProjectRef, {
+      ...newProjectData,
+      updatedAt: now,
+    });
+    
+    // 4. Copy all snapshots to new project
+    for (let i = 0; i < snapshots.length; i++) {
+      const snapshot = snapshots[i];
+      const data = allSnapshotData[i];
+      if (data) {
+        const newSnapshotRef = doc(db, HILLCHARTS_COLLECTION, newProjectId, 'snapshots', snapshot.id);
+        await setDoc(newSnapshotRef, {
+          ...data,
+          project: newName,
+          createdAt: snapshot.createdAt ? Timestamp.fromDate(snapshot.createdAt) : Timestamp.now(),
+          updatedAt: snapshot.updatedAt ? Timestamp.fromDate(snapshot.updatedAt) : Timestamp.now(),
+        });
+      }
+    }
+    
+    // 5. Delete old project and snapshots
+    await deleteProject(projectId);
+    
+    return newProjectId;
+  } catch (error) {
+    console.error('Error updating project name:', error);
+    throw error;
+  }
+}
+
+/**
  * Delete a project from the hillcharts collection
  * Also deletes all snapshots in the project's snapshots subcollection
  */
