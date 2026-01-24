@@ -177,6 +177,8 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
                 await onSaveBeforeClear();
               }
             }
+            // Show the create form instead of just clearing
+            setShowCreateForm(true);
             onClear();
           }}
           disabled={isLoading}
@@ -191,7 +193,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             opacity: isLoading ? 0.6 : 1,
           }}
         >
-          New Project
+          + New Project
         </button>
       </div>
 
@@ -214,7 +216,7 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               placeholder="Enter project name"
               disabled={isCreating}
               style={{
-                flex: 1,
+                width: 200,
                 padding: '6px 12px',
                 borderRadius: 4,
                 border: `1px solid ${colors.inputBorder}`,

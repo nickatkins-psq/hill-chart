@@ -49,6 +49,59 @@ export interface ProjectSnapshotMeta {
 // Hillcharts collection - contains both project metadata and data
 const HILLCHARTS_COLLECTION = 'hillcharts';
 
+/**
+ * Sanitize a project name to be a valid Firestore document ID
+ * - Converts to lowercase
+ * - Replaces spaces and special characters with hyphens
+ * - Removes invalid characters
+ * - Ensures it's not empty
+ */
+function sanitizeProjectNameForId(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]/g, '-') // Replace non-alphanumeric (except hyphens) with hyphens
+    .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+    .replace(/^-|-$/g, '') // Remove leading/trailing hyphens
+    || 'untitled-project'; // Fallback if empty after sanitization
+}
+
+/**
+ * Generate a unique document ID from a project name
+ * If a project with the sanitized name already exists, append a number
+ */
+async function generateUniqueProjectId(name: string): Promise<string> {
+  const baseId = sanitizeProjectNameForId(name);
+  const hillchartsRef = collection(db, HILLCHARTS_COLLECTION);
+  
+  // Check if base ID exists
+  const baseDocRef = doc(hillchartsRef, baseId);
+  const baseDocSnap = await getDoc(baseDocRef);
+  
+  if (!baseDocSnap.exists()) {
+    return baseId;
+  }
+  
+  // If exists, try appending numbers until we find an available ID
+  let counter = 1;
+  let candidateId = `${baseId}-${counter}`;
+  
+  while (counter < 1000) { // Safety limit
+    const candidateDocRef = doc(hillchartsRef, candidateId);
+    const candidateDocSnap = await getDoc(candidateDocRef);
+    
+    if (!candidateDocSnap.exists()) {
+      return candidateId;
+    }
+    
+    counter++;
+    candidateId = `${baseId}-${counter}`;
+  }
+  
+  // Fallback: append timestamp if we can't find a unique ID
+  return `${baseId}-${Date.now()}`;
+}
+
 function getStoredProjectIds(): string[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -458,12 +511,20 @@ service cloud.firestore {
 
 /**
  * Create a new project in the hillcharts collection
+ * Uses the project name (sanitized) as the document ID
  */
 export async function createProject(name: string): Promise<Project> {
   try {
     const hillchartsRef = collection(db, HILLCHARTS_COLLECTION);
-    const newProjectRef = doc(hillchartsRef);
+    const projectId = await generateUniqueProjectId(name);
+    const newProjectRef = doc(hillchartsRef, projectId);
     const now = Timestamp.now();
+    
+    // Check if document already exists (shouldn't happen with generateUniqueProjectId, but double-check)
+    const existingDoc = await getDoc(newProjectRef);
+    if (existingDoc.exists()) {
+      throw new Error(`Project with name "${name}" already exists`);
+    }
     
     // Create initial project data structure
     const initialProjectData: ProjectData = {
@@ -483,7 +544,7 @@ export async function createProject(name: string): Promise<Project> {
     });
     
     return {
-      id: newProjectRef.id,
+      id: projectId,
       name,
       createdAt: now.toDate(),
       updatedAt: now.toDate(),
