@@ -143,6 +143,9 @@ const App: React.FC = () => {
   const [newlyAddedScopes, setNewlyAddedScopes] = useState<Set<string>>(new Set());
   // Store original epic positions for reset functionality
   const [originalEpics, setOriginalEpics] = useState<EpicDot[]>(() => loadInitialEpics());
+  // Track if project title is being edited
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editingTitleValue, setEditingTitleValue] = useState("");
 
   // Reset profile image error when user changes
   useEffect(() => {
@@ -585,6 +588,7 @@ const App: React.FC = () => {
   const handleProjectCreated = (project: Project) => {
     setSelectedProjectName(project.name);
     setSelectedProjectId(project.id);
+    setProjectName(project.name);
     // Save selected project to localStorage
     if (typeof window !== "undefined") {
       try {
@@ -917,9 +921,63 @@ const App: React.FC = () => {
               →
             </button>
           </div>
-          <h2 style={{ margin: 0, color: colors.textPrimary }}>
-            {selectedProjectId && projectName ? projectName : "Team"}
-          </h2>
+          {isEditingTitle && selectedProjectId ? (
+            <input
+              type="text"
+              value={editingTitleValue}
+              onChange={(e) => setEditingTitleValue(e.target.value)}
+              onBlur={() => {
+                if (editingTitleValue.trim()) {
+                  setProjectName(editingTitleValue.trim());
+                  setSelectedProjectName(editingTitleValue.trim());
+                  setIsModified(true);
+                }
+                setIsEditingTitle(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (editingTitleValue.trim()) {
+                    setProjectName(editingTitleValue.trim());
+                    setSelectedProjectName(editingTitleValue.trim());
+                    setIsModified(true);
+                  }
+                  setIsEditingTitle(false);
+                } else if (e.key === "Escape") {
+                  setIsEditingTitle(false);
+                }
+              }}
+              autoFocus
+              style={{
+                margin: 0,
+                padding: "4px 8px",
+                fontSize: "1.5em",
+                fontWeight: "bold",
+                color: colors.textPrimary,
+                background: colors.inputBg,
+                border: `1px solid ${colors.inputBorder}`,
+                borderRadius: 4,
+                outline: "none",
+                minWidth: 150,
+              }}
+            />
+          ) : (
+            <h2
+              style={{
+                margin: 0,
+                color: colors.textPrimary,
+                cursor: selectedProjectId ? "pointer" : "default",
+              }}
+              onClick={() => {
+                if (selectedProjectId) {
+                  setEditingTitleValue(projectName || "New Project");
+                  setIsEditingTitle(true);
+                }
+              }}
+              title={selectedProjectId ? "Click to edit title" : undefined}
+            >
+              {selectedProjectId && projectName ? projectName : "Team"}
+            </h2>
+          )}
         </div>
         {selectedProjectId && currentSnapshotIndex !== null && !isModified && (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

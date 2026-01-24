@@ -24,8 +24,6 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -53,19 +51,11 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     }
   };
 
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProjectName.trim()) {
-      alert('Please enter a project name');
-      return;
-    }
-
+  const handleCreateProject = async () => {
     setIsCreating(true);
     try {
-      const newProject = await createProject(newProjectName.trim());
+      const newProject = await createProject('New Project');
       setProjects((prev) => [newProject, ...prev]);
-      setNewProjectName('');
-      setShowCreateForm(false);
       onProjectCreated(newProject);
       onProjectSelect(newProject.id);
     } catch (error) {
@@ -177,11 +167,11 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
                 await onSaveBeforeClear();
               }
             }
-            // Show the create form instead of just clearing
-            setShowCreateForm(true);
             onClear();
+            // Immediately create a new project called "New Project"
+            await handleCreateProject();
           }}
-          disabled={isLoading}
+          disabled={isLoading || isCreating}
           style={{
             padding: '6px 12px',
             borderRadius: 4,
@@ -189,81 +179,13 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             background: colors.buttonBg,
             color: colors.buttonText,
             fontSize: 13,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-            opacity: isLoading ? 0.6 : 1,
+            cursor: isLoading || isCreating ? 'not-allowed' : 'pointer',
+            opacity: isLoading || isCreating ? 0.6 : 1,
           }}
         >
-          + New Project
+          {isCreating ? 'Creating...' : '+ New Project'}
         </button>
       </div>
-
-      {showCreateForm && (
-        <form
-          onSubmit={handleCreateProject}
-          style={{
-            padding: 12,
-            border: `1px solid ${colors.borderPrimary}`,
-            borderRadius: 4,
-            backgroundColor: colors.bgSecondary,
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="Enter project name"
-              disabled={isCreating}
-              style={{
-                width: 200,
-                padding: '6px 12px',
-                borderRadius: 4,
-                border: `1px solid ${colors.inputBorder}`,
-                fontSize: 14,
-                backgroundColor: colors.inputBg,
-                color: colors.inputText,
-              }}
-              autoFocus
-            />
-            <button
-              type="submit"
-              disabled={isCreating || !newProjectName.trim()}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 4,
-                border: `1px solid ${colors.infoBg}`,
-                background: colors.infoBg,
-                color: 'white',
-                fontSize: 13,
-                cursor: isCreating || !newProjectName.trim() ? 'not-allowed' : 'pointer',
-                opacity: isCreating || !newProjectName.trim() ? 0.6 : 1,
-              }}
-            >
-              {isCreating ? 'Creating...' : 'Create'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setShowCreateForm(false);
-                setNewProjectName('');
-              }}
-              disabled={isCreating}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 4,
-                border: `1px solid ${colors.borderSecondary}`,
-                background: colors.buttonBg,
-                color: colors.buttonText,
-                fontSize: 13,
-                cursor: isCreating ? 'not-allowed' : 'pointer',
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
 
       {projects.length === 0 && !isLoading && !error && (
         <div style={{ fontSize: 12, color: colors.textPrimary, fontStyle: 'italic' }}>
