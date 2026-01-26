@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getProjects, createProject, deleteProject, testFirestoreAccess, testSnapshotDiscovery, canUserEditProject, type Project } from '../services/firestoreService';
+import { getProjects, createProject, testFirestoreAccess, testSnapshotDiscovery, type Project } from '../services/firestoreService';
 import { getThemeColors } from '../utils/themeColors';
+import { getButtonStyles } from '../utils/uiStyles';
 import { useAuth } from '../contexts/AuthContext';
 
 interface ProjectSelectorProps {
@@ -30,7 +31,6 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -103,46 +103,6 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
     }
   };
 
-  const handleDeleteProject = async (projectId: string, projectName: string) => {
-    // Check if user can edit this project
-    const project = projects.find((p) => p.id === projectId);
-    if (!canUserEditProject(project || null, user?.uid || null)) {
-      setError("You don't have permission to delete this project. Only the project creator can delete it.");
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Are you sure you want to delete "${projectName}"? This will permanently delete the project and all its snapshots. This action cannot be undone.`
-    );
-    
-    if (!confirmed) {
-      return;
-    }
-
-    setIsDeleting(true);
-    setError(null);
-    try {
-      await deleteProject(projectId);
-      
-      // Remove from local state
-      setProjects((prev) => prev.filter((p) => p.id !== projectId));
-      
-      // If the deleted project was selected, clear selection
-      if (selectedProjectId === projectId) {
-        onProjectSelect(null);
-      }
-      
-      // Reload projects to ensure consistency
-      await loadProjects();
-    } catch (error) {
-      console.error('Error deleting project:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setError(`Failed to delete project: ${errorMessage}`);
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
   return (
     <div style={{ marginBottom: 24, color: colors.textPrimary }}>
       {error && !isLoading && (
@@ -164,15 +124,15 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
             <button
               type="button"
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              disabled={isLoading || !!error || isDeleting}
+              disabled={isLoading || !!error}
               style={{
                 padding: '6px 12px',
                 borderRadius: 4,
                 border: `1px solid ${colors.selectBorder}`,
                 fontSize: 14,
                 minWidth: 200,
-                backgroundColor: isLoading || error || isDeleting ? colors.bgTertiary : colors.selectBg,
-                cursor: isLoading || error || isDeleting ? 'not-allowed' : 'pointer',
+                backgroundColor: isLoading || error ? colors.bgTertiary : colors.selectBg,
+                cursor: isLoading || error ? 'not-allowed' : 'pointer',
                 color: colors.selectTextPlaceholder,
                 display: 'flex',
                 alignItems: 'center',
@@ -309,65 +269,14 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
               await handleCreateProject();
             }}
             disabled={isLoading || isCreating}
-            style={{
-              padding: '6px 12px',
-              borderRadius: 4,
-              border: `1px solid ${colors.borderSecondary}`,
-              background: colors.buttonBg,
-              color: colors.buttonText,
-              fontSize: 13,
-              cursor: isLoading || isCreating ? 'not-allowed' : 'pointer',
-              opacity: isLoading || isCreating ? 0.6 : 1,
-            }}
+            style={getButtonStyles(colors, {
+              variant: "info",
+              disabled: isLoading || isCreating,
+            })}
           >
             {isCreating ? 'Creating...' : '+ New Project'}
           </button>
         </div>
-        {selectedProjectId && !isLoading && (
-          <button
-            type="button"
-            onClick={() => {
-              const project = projects.find((p) => p.id === selectedProjectId);
-              if (project) {
-                handleDeleteProject(project.id, project.name);
-              }
-            }}
-            disabled={isDeleting || isLoading}
-            title="Delete selected project"
-            style={{
-              padding: '6px 12px',
-              borderRadius: 4,
-              border: `1px solid ${colors.errorBorder || '#dc3545'}`,
-              background: colors.errorBg || '#f8d7da',
-              color: colors.errorText || '#dc3545',
-              fontSize: 13,
-              cursor: isDeleting || isLoading ? 'not-allowed' : 'pointer',
-              opacity: isDeleting || isLoading ? 0.6 : 1,
-              fontWeight: 500,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 6h18" />
-              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              <line x1="10" y1="11" x2="10" y2="17" />
-              <line x1="14" y1="11" x2="14" y2="17" />
-            </svg>
-            <span>{isDeleting ? 'Deleting...' : 'Delete Project'}</span>
-          </button>
-        )}
       </div>
 
       {projects.length === 0 && !isLoading && !error && (

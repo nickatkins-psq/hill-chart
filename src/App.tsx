@@ -17,6 +17,7 @@ import {
   updateProjectName,
   canUserEditProject,
   getProjects,
+  deleteProject,
   type Project,
   type ProjectData,
   type ProjectSnapshotMeta,
@@ -195,6 +196,8 @@ const App: React.FC = () => {
   const [editingTitleValue, setEditingTitleValue] = useState("");
   // Trigger for reloading project list
   const [projectListReloadTrigger, setProjectListReloadTrigger] = useState(0);
+  // Track if project is being deleted
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
 
   // Reset profile image error when user changes
   useEffect(() => {
@@ -1140,6 +1143,76 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteProject = async () => {
+    if (!selectedProjectId || !selectedProjectName) {
+      return;
+    }
+
+    // Check if user can edit this project
+    if (!canUserEditProject(selectedProject, user?.uid || null)) {
+      setToast({
+        message: "You don't have permission to delete this project. Only the project creator can delete it.",
+        type: 'error',
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${selectedProjectName}"? This will permanently delete the project and all its snapshots. This action cannot be undone.`
+    );
+    
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingProject(true);
+    try {
+      await deleteProject(selectedProjectId);
+      
+      // Clear selection and reset state
+      setSelectedProjectId(null);
+      setSelectedProjectName(null);
+      setSelectedProject(null);
+      setEpics([]);
+      setOriginalEpics([]);
+      setProjectName(null);
+      setCurrentDate(null);
+      setHasPreviousDay(false);
+      setHasNextDay(false);
+      setProjectSnapshots([]);
+      setCurrentSnapshotIndex(null);
+      setIsModified(false);
+      
+      // Update URL to root
+      updateUrlForProject(null);
+      
+      // Clear localStorage
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(SELECTED_PROJECT_KEY);
+        } catch {
+          // ignore write errors
+        }
+      }
+      
+      // Trigger project list reload
+      setProjectListReloadTrigger((prev) => prev + 1);
+      
+      setToast({
+        message: "Project deleted successfully.",
+        type: 'success',
+      });
+    } catch (error) {
+      console.error('Error deleting project:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setToast({
+        message: `Failed to delete project: ${errorMessage}`,
+        type: 'error',
+      });
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
 
   return (
     <>
@@ -1245,266 +1318,345 @@ const App: React.FC = () => {
         reloadTrigger={projectListReloadTrigger}
       />
       
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button
-              type="button"
-              onClick={handlePreviousDay}
-              disabled={!hasPreviousDay || isLoading}
-              style={getNavButtonStyles(colors, hasPreviousDay && !isLoading)}
-            >
-              ←
-            </button>
-            <button
-              type="button"
-              onClick={handleNextDay}
-              disabled={!hasNextDay || isLoading}
-              style={getNavButtonStyles(colors, hasNextDay && !isLoading)}
-            >
-              →
-            </button>
-          </div>
-          {isEditingTitle && selectedProjectId ? (
-            <input
-              type="text"
-              value={editingTitleValue}
-              onChange={(e) => setEditingTitleValue(e.target.value)}
-              onBlur={async () => {
-                const trimmedName = editingTitleValue.trim();
-                if (trimmedName && trimmedName !== projectName) {
-                  const success = await handleUpdateProjectName(trimmedName);
-                  if (!success) {
-                    // Reset to original name if update failed
-                    setEditingTitleValue(projectName || "");
-                  }
-                }
-                setIsEditingTitle(false);
-              }}
-              onKeyDown={async (e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  const trimmedName = editingTitleValue.trim();
-                  if (trimmedName && trimmedName !== projectName) {
-                    const success = await handleUpdateProjectName(trimmedName);
-                    if (success) {
-                      setIsEditingTitle(false);
-                    } else {
-                      // Reset to original name if update failed
-                      setEditingTitleValue(projectName || "");
-                    }
-                  } else {
-                    setIsEditingTitle(false);
-                  }
-                } else if (e.key === "Escape") {
-                  setIsEditingTitle(false);
-                  setEditingTitleValue(projectName || "");
-                }
-              }}
-              autoFocus
-              style={{
-                margin: 0,
-                padding: "4px 8px",
-                fontSize: "1.5em",
-                fontWeight: "bold",
-                color: colors.textPrimary,
-                background: colors.inputBg,
-                border: `1px solid ${colors.inputBorder}`,
-                borderRadius: 4,
-                outline: "none",
-                minWidth: 150,
-              }}
-            />
-          ) : selectedProjectId && !isLoading ? (
-            <h2
-              style={{
-                margin: 0,
-                color: colors.textPrimary,
-                cursor: canUserEditProject(selectedProject, user?.uid || null) ? "pointer" : "default",
-              }}
-              onClick={() => {
-                if (canUserEditProject(selectedProject, user?.uid || null)) {
-                  setEditingTitleValue(projectName || "New Project");
-                  setIsEditingTitle(true);
-                } else {
-                  setToast({
-                    message: "You don't have permission to edit this project. Only the project creator can edit it.",
-                    type: 'error',
-                  });
-                }
-              }}
-              title={canUserEditProject(selectedProject, user?.uid || null) ? "Click to edit title" : "Only the project creator can edit this project"}
-            >
-              {projectName || "New Project"}
-              {currentDate && (
-                <span style={{ 
-                  fontSize: "0.6em", 
-                  fontWeight: "normal", 
-                  color: colors.textSecondary,
-                  marginLeft: 8
-                }}>
-                  Hill Chart on {formatDateWithTime(currentDate)}
-                </span>
-              )}
-            </h2>
-          ) : null}
-        </div>
-        {selectedProjectId && currentSnapshotIndex !== null && !isModified && canUserEditProject(selectedProject, user?.uid || null) && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={handleDeleteSnapshot}
-              disabled={isLoading}
-              style={{
-                ...getButtonStyles(colors, {
-                  variant: "danger",
-                  disabled: isLoading,
-                  height: "32px",
-                }),
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-              <span>Delete Snapshot</span>
-            </button>
-          </div>
-        )}
-        {isModified && selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={handleReset}
-              disabled={isLoading || (originalEpics.length === 0 && epics.length === 0)}
-              style={getButtonStyles(colors, {
-                variant: "danger",
-                disabled: isLoading || (originalEpics.length === 0 && epics.length === 0),
-                height: "32px",
-              })}
-            >
-              <span>↺</span>
-              <span>Undo Changes</span>
-            </button>
-            <button
-              key="save-button"
-              type="button"
-              onClick={handleSaveToFirestore}
-              disabled={isSaving || isLoading}
-              style={{
-                ...getButtonStyles(colors, {
-                  variant: "info",
-                  disabled: isSaving || isLoading,
-                  height: "32px",
-                }),
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M21 16v-3.5a5.5 5.5 0 0 0-8-4.93A5.5 5.5 0 0 0 5.5 9L5 9.28a4.5 4.5 0 0 0-2.5 4.22c0 2.5 2 4.5 4.5 4.5h13a3 3 0 0 0 3-3" />
-                <polyline points="16 16 12 12 8 16" />
-                <line x1="12" y1="12" x2="12" y2="21" />
-              </svg>
-              <span>{isSaving ? "Saving..." : "Save Snapshot"}</span>
-            </button>
-          </div>
-        )}
-        {selectedProjectId && !canUserEditProject(selectedProject, user?.uid || null) && (
-          <div style={{ fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' }}>
-            Read-only: Only the project creator can edit this project
-          </div>
-        )}
-      </div>
-
-      {isLoading && selectedProjectId ? (
+      {selectedProjectId && (
         <div
           style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            minHeight: "400px",
-            gap: 16,
-            color: colors.textSecondary,
+            border: `1px solid ${colors.borderPrimary}`,
+            borderRadius: 8,
+            padding: 20,
+            marginBottom: 24,
+            backgroundColor: colors.bgSecondary,
+            position: 'relative',
           }}
         >
-          <svg
-            width="32"
-            height="32"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{
-              animation: "spin 1s linear infinite",
-            }}
-          >
-            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-            <path d="M3 3v5h5" />
-            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-            <path d="M21 21v-5h-5" />
-          </svg>
-          <div style={{ fontSize: 14 }}>Loading project...</div>
-        </div>
-      ) : (
-        <div style={{ backgroundColor: colors.bgPrimary, position: 'relative' }}>
-          <HillChart 
-            epics={epics} 
-            onUpdateEpicX={handleUpdateEpicX}
-            title={selectedProjectId ? (projectName || "New Project") : ""}
-            date={currentDate}
-          />
-          {!selectedProjectId && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                pointerEvents: 'none',
-              }}
-            >
-              <div
-                style={{
-                  color: colors.textSecondary,
-                  fontSize: 14,
-                  textAlign: 'center',
-                  padding: '0 24px',
-                }}
-              >
-                Select a project from the list or create a new project to get started
+          {/* Project title on its own line */}
+          {!isLoading && (
+            <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ flex: 1 }}>
+                {isEditingTitle && selectedProjectId ? (
+                <input
+                  type="text"
+                  value={editingTitleValue}
+                  onChange={(e) => setEditingTitleValue(e.target.value)}
+                  onBlur={async () => {
+                    const trimmedName = editingTitleValue.trim();
+                    if (trimmedName && trimmedName !== projectName) {
+                      const success = await handleUpdateProjectName(trimmedName);
+                      if (!success) {
+                        // Reset to original name if update failed
+                        setEditingTitleValue(projectName || "");
+                      }
+                    }
+                    setIsEditingTitle(false);
+                  }}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const trimmedName = editingTitleValue.trim();
+                      if (trimmedName && trimmedName !== projectName) {
+                        const success = await handleUpdateProjectName(trimmedName);
+                        if (success) {
+                          setIsEditingTitle(false);
+                        } else {
+                          // Reset to original name if update failed
+                          setEditingTitleValue(projectName || "");
+                        }
+                      } else {
+                        setIsEditingTitle(false);
+                      }
+                    } else if (e.key === "Escape") {
+                      setIsEditingTitle(false);
+                      setEditingTitleValue(projectName || "");
+                    }
+                  }}
+                  autoFocus
+                  style={{
+                    margin: 0,
+                    padding: "4px 8px",
+                    fontSize: "1.5em",
+                    fontWeight: "bold",
+                    color: colors.textPrimary,
+                    background: colors.inputBg,
+                    border: `1px solid ${colors.inputBorder}`,
+                    borderRadius: 4,
+                    outline: "none",
+                    minWidth: 150,
+                    width: "100%",
+                    maxWidth: 600,
+                  }}
+                />
+              ) : selectedProjectId ? (
+                <h2
+                  style={{
+                    margin: 0,
+                    color: colors.textPrimary,
+                    cursor: canUserEditProject(selectedProject, user?.uid || null) ? "pointer" : "default",
+                    fontSize: "1.5em",
+                    fontWeight: "bold",
+                  }}
+                  onClick={() => {
+                    if (canUserEditProject(selectedProject, user?.uid || null)) {
+                      setEditingTitleValue(projectName || "New Project");
+                      setIsEditingTitle(true);
+                    } else {
+                      setToast({
+                        message: "You don't have permission to edit this project. Only the project creator can edit it.",
+                        type: 'error',
+                      });
+                    }
+                  }}
+                  title={canUserEditProject(selectedProject, user?.uid || null) ? "Click to edit title" : "Only the project creator can edit this project"}
+                >
+                  {projectName || "New Project"}
+                </h2>
+              ) : null}
               </div>
+              {selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) && (
+                <button
+                  type="button"
+                  onClick={handleDeleteProject}
+                  disabled={isDeletingProject || isLoading}
+                  title="Delete project"
+                  style={{
+                    ...getButtonStyles(colors, {
+                      variant: "danger",
+                      disabled: isDeletingProject || isLoading,
+                      height: "32px",
+                    }),
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                    <line x1="10" y1="11" x2="10" y2="17" />
+                    <line x1="14" y1="11" x2="14" y2="17" />
+                  </svg>
+                  <span>{isDeletingProject ? 'Deleting...' : 'Delete Project'}</span>
+                </button>
+              )}
             </div>
           )}
+          
+          {/* Nav buttons and date/time on separate line */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button
+                  type="button"
+                  onClick={handlePreviousDay}
+                  disabled={!hasPreviousDay || isLoading}
+                  style={getNavButtonStyles(colors, hasPreviousDay && !isLoading)}
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNextDay}
+                  disabled={!hasNextDay || isLoading}
+                  style={getNavButtonStyles(colors, hasNextDay && !isLoading)}
+                >
+                  →
+                </button>
+              </div>
+              {currentDate && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "4px 8px",
+                      borderRadius: 4,
+                      border: `1px solid ${colors.borderSecondary}`,
+                      backgroundColor: colors.bgSecondary,
+                    }}
+                  >
+                    <span style={{ 
+                      fontSize: "0.9em", 
+                      fontWeight: "normal", 
+                      color: colors.textSecondary,
+                    }}>
+                      {formatDateWithTime(currentDate)}
+                    </span>
+                    {currentSnapshotIndex !== null && !isModified && canUserEditProject(selectedProject, user?.uid || null) && (
+                      <button
+                        type="button"
+                        onClick={handleDeleteSnapshot}
+                        disabled={isLoading}
+                        style={{
+                          padding: 0,
+                          border: "none",
+                          background: "transparent",
+                          cursor: isLoading ? "not-allowed" : "pointer",
+                          opacity: isLoading ? 0.6 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: colors.textSecondary,
+                          width: 16,
+                          height: 16,
+                        }}
+                        title="Delete snapshot"
+                      >
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  {isModified && selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleReset}
+                        disabled={isLoading || (originalEpics.length === 0 && epics.length === 0)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: 4,
+                          border: `1px solid ${colors.borderSecondary}`,
+                          background: "transparent",
+                          cursor: (isLoading || (originalEpics.length === 0 && epics.length === 0)) ? "not-allowed" : "pointer",
+                          opacity: (isLoading || (originalEpics.length === 0 && epics.length === 0)) ? 0.6 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: colors.textSecondary,
+                          fontSize: 16,
+                          width: 28,
+                          height: 28,
+                        }}
+                        title="Undo Changes"
+                      >
+                        ↺
+                      </button>
+                      <button
+                        key="save-button"
+                        type="button"
+                        onClick={handleSaveToFirestore}
+                        disabled={isSaving || isLoading}
+                        style={{
+                          ...getButtonStyles(colors, {
+                            variant: "info",
+                            disabled: isSaving || isLoading,
+                            height: "28px",
+                          }),
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          fontSize: 13,
+                        }}
+                        title={isSaving ? "Saving..." : "Save Snapshot"}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M21 16v-3.5a5.5 5.5 0 0 0-8-4.93A5.5 5.5 0 0 0 5.5 9L5 9.28a4.5 4.5 0 0 0-2.5 4.22c0 2.5 2 4.5 4.5 4.5h13a3 3 0 0 0 3-3" />
+                          <polyline points="16 16 12 12 8 16" />
+                          <line x1="12" y1="12" x2="12" y2="21" />
+                        </svg>
+                        <span>{isSaving ? "Saving..." : "Save Snapshot"}</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            {selectedProjectId && !canUserEditProject(selectedProject, user?.uid || null) && (
+              <div style={{ fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' }}>
+                Read-only: Only the project creator can edit this project
+              </div>
+            )}
+          </div>
+
+          {isLoading && selectedProjectId ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                minHeight: "400px",
+                gap: 16,
+                color: colors.textSecondary,
+              }}
+            >
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  animation: "spin 1s linear infinite",
+                }}
+              >
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M21 21v-5h-5" />
+              </svg>
+              <div style={{ fontSize: 14 }}>Loading project...</div>
+            </div>
+          ) : (
+            <div style={{ backgroundColor: colors.bgPrimary, position: 'relative' }}>
+              <HillChart 
+                epics={epics} 
+                onUpdateEpicX={handleUpdateEpicX}
+                title={selectedProjectId ? (projectName || "New Project") : ""}
+                date={currentDate}
+              />
+            </div>
+          )}
+        </div>
+      )}
+      
+      {!selectedProjectId && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: '400px',
+            color: colors.textSecondary,
+            fontSize: 14,
+            textAlign: 'center',
+            padding: '0 24px',
+          }}
+        >
+          Select a project from the list or create a new project to get started
         </div>
       )}
 
