@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { getProjects, createProject, deleteProject, testFirestoreAccess, testSnapshotDiscovery, canUserEditProject, type Project } from '../services/firestoreService';
 import { getThemeColors } from '../utils/themeColors';
 import { useAuth } from '../contexts/AuthContext';
@@ -32,6 +32,8 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadProjects();
@@ -46,6 +48,22 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       loadProjects();
     }
   }, [reloadTrigger]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+
+    if (isDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [isDropdownOpen]);
 
   const loadProjects = async () => {
     setIsLoading(true);
@@ -141,45 +159,104 @@ const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <label style={{ fontSize: 14, fontWeight: 500, color: colors.textPrimary }}>
-            Project:
-          </label>
-          <select
-            value={isLoading ? '' : (selectedProjectId || '')}
-            onChange={(e) => {
-              const value = e.target.value;
-              onProjectSelect(value || null);
-            }}
-            disabled={isLoading || !!error || isDeleting}
-            style={{
-              padding: '6px 12px',
-              borderRadius: 4,
-              border: `1px solid ${colors.selectBorder}`,
-              fontSize: 14,
-              minWidth: 200,
-              backgroundColor: isLoading || error || isDeleting ? colors.bgTertiary : colors.selectBg,
-              cursor: isLoading || error || isDeleting ? 'not-allowed' : 'pointer',
-              color: isLoading ? colors.selectTextPlaceholder : (selectedProjectId ? colors.selectText : colors.selectTextPlaceholder),
-            }}
-          >
-            {isLoading ? (
-              <option value="" disabled>
-                Loading...
-              </option>
-            ) : (
-              <>
-                <option value="" disabled hidden>
-                  Select a project...
-                </option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, position: 'relative' }} ref={dropdownRef}>
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+              disabled={isLoading || !!error || isDeleting}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 4,
+                border: `1px solid ${colors.selectBorder}`,
+                fontSize: 14,
+                minWidth: 200,
+                backgroundColor: isLoading || error || isDeleting ? colors.bgTertiary : colors.selectBg,
+                cursor: isLoading || error || isDeleting ? 'not-allowed' : 'pointer',
+                color: colors.selectTextPlaceholder,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+              }}
+            >
+              <span>{isLoading ? 'Loading...' : 'Select a project'}</span>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  transform: isDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.2s',
+                }}
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {isDropdownOpen && !isLoading && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  marginTop: 4,
+                  minWidth: 200,
+                  backgroundColor: colors.selectBg,
+                  border: `1px solid ${colors.selectBorder}`,
+                  borderRadius: 4,
+                  boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                  zIndex: 1000,
+                  maxHeight: 300,
+                  overflowY: 'auto',
+                }}
+              >
+                {projects.length === 0 ? (
+                  <div style={{ padding: '12px', color: colors.textSecondary, fontSize: 13 }}>
+                    No projects found
+                  </div>
+                ) : (
+                  projects.map((project) => (
+                    <button
+                      key={project.id}
+                      type="button"
+                      onClick={() => {
+                        onProjectSelect(project.id);
+                        setIsDropdownOpen(false);
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        textAlign: 'left',
+                        border: 'none',
+                        background: selectedProjectId === project.id ? colors.bgSecondary : 'transparent',
+                        color: colors.textPrimary,
+                        fontSize: 14,
+                        cursor: 'pointer',
+                        transition: 'background-color 0.2s',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (selectedProjectId !== project.id) {
+                          e.currentTarget.style.backgroundColor = colors.bgSecondary;
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (selectedProjectId !== project.id) {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }
+                      }}
+                    >
+                      {project.name}
+                    </button>
+                  ))
+                )}
+              </div>
             )}
-          </select>
+          </div>
           <button
             type="button"
             onClick={loadProjects}

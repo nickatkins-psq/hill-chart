@@ -115,22 +115,30 @@ function updateUrlForProject(projectId: string | null) {
 }
 
 function loadSelectedProjectId(): string | null {
+  if (typeof window === "undefined") return null;
+  
+  const path = window.location.pathname;
+  
+  // If path is exactly "/", return null (blank page)
+  if (path === "/") {
+    return null;
+  }
+  
   // First, try to get from URL
   const urlSlug = getProjectSlugFromUrl();
   if (urlSlug) {
     return urlSlug;
   }
   
-  // Fallback to localStorage for backward compatibility
-  if (typeof window !== "undefined") {
-    try {
-      const projectId = window.localStorage.getItem(SELECTED_PROJECT_KEY);
-      return projectId || null;
-    } catch {
-      // ignore parse errors
-    }
+  // Only fallback to localStorage if we're not at root
+  // (This handles cases where URL might be malformed but not root)
+  try {
+    const projectId = window.localStorage.getItem(SELECTED_PROJECT_KEY);
+    return projectId || null;
+  } catch {
+    // ignore parse errors
+    return null;
   }
-  return null;
 }
 
 function phaseLabel(phase: HillPhase): string {
@@ -154,7 +162,8 @@ const App: React.FC = () => {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => loadSelectedProjectId());
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [epics, setEpics] = useState<EpicDot[]>(() => loadInitialEpics());
+  // Initialize epics as empty - they will be loaded when a project is selected
+  const [epics, setEpics] = useState<EpicDot[]>([]);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -163,6 +172,8 @@ const App: React.FC = () => {
   const [hasNextDay, setHasNextDay] = useState(false);
   const [projectSnapshots, setProjectSnapshots] = useState<ProjectSnapshotMeta[]>([]);
   const [currentSnapshotIndex, setCurrentSnapshotIndex] = useState<number | null>(null);
+  // Cache for snapshot data (keyed by snapshotId, limited to 10 entries)
+  const [snapshotCache, setSnapshotCache] = useState<Map<string, ProjectData>>(new Map());
   // Store uploaded files in memory keyed by date string (YYYY-MM-DD)
   const [uploadedFiles] = useState<Map<string, HillChartData>>(new Map());
   // Toast notification state
@@ -190,8 +201,17 @@ const App: React.FC = () => {
     setProfileImageError(false);
   }, [user?.uid]);
 
-  // Sync URL when project is loaded from localStorage on initial mount
+  // Sync URL when project is loaded on initial mount
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const path = window.location.pathname;
+    
+    // If path is exactly "/", we're at root - no project should be selected
+    // (loadSelectedProjectId already handles this, so this is just a safety check)
+    if (path === "/") {
+      return;
+    }
+    
     const urlSlug = getProjectSlugFromUrl();
     // If we have a project ID but URL doesn't match, update URL
     if (selectedProjectId && urlSlug !== selectedProjectId) {
@@ -202,20 +222,33 @@ const App: React.FC = () => {
   // Handle browser back/forward navigation
   useEffect(() => {
     const handlePopState = () => {
+      if (typeof window === "undefined") return;
+      const path = window.location.pathname;
+      
+      // If path is exactly "/", clear selection
+      if (path === "/") {
+        setSelectedProjectId(null);
+        // Clear localStorage when navigating to root
+        try {
+          window.localStorage.removeItem(SELECTED_PROJECT_KEY);
+        } catch {
+          // ignore write errors
+        }
+        return;
+      }
+      
       const urlSlug = getProjectSlugFromUrl();
       if (urlSlug !== selectedProjectId) {
         setSelectedProjectId(urlSlug);
         // Update localStorage for backward compatibility
-        if (typeof window !== "undefined") {
-          try {
-            if (urlSlug) {
-              window.localStorage.setItem(SELECTED_PROJECT_KEY, urlSlug);
-            } else {
-              window.localStorage.removeItem(SELECTED_PROJECT_KEY);
-            }
-          } catch {
-            // ignore write errors
+        try {
+          if (urlSlug) {
+            window.localStorage.setItem(SELECTED_PROJECT_KEY, urlSlug);
+          } else {
+            window.localStorage.removeItem(SELECTED_PROJECT_KEY);
           }
+        } catch {
+          // ignore write errors
         }
       }
     };
@@ -241,59 +274,84 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!selectedProjectId) {
       setSelectedProject(null);
-      // If no project selected, try to load from local file (backward compatibility)
-      loadHillChartData().then((data) => {
-        if (data && data.scopes.length > 0) {
-          const convertedEpics = convertScopesToEpics(data.scopes);
-          setEpics(convertedEpics);
-          setOriginalEpics(convertedEpics);
-          setProjectName(data.project);
-          // Try to parse date from generated field or filename
-          if (data.generated) {
-            const parsedDate = new Date(data.generated);
-            if (!isNaN(parsedDate.getTime())) {
-              setCurrentDate(parsedDate);
-            } else {
-              setCurrentDate(null);
-            }
-          } else {
-            setCurrentDate(null);
-          }
-        } else {
-          setCurrentDate(null);
-        }
-        setIsModified(false); // Reset modification flag when loading data
-      });
+      setSelectedProjectName(null);
+      // Clear all state to show blank page when no project is selected
+      setEpics([]);
+      setOriginalEpics([]);
+      setProjectName(null);
+      setCurrentDate(null);
+      setProjectSnapshots([]);
+      setCurrentSnapshotIndex(null);
+      setHasPreviousDay(false);
+      setHasNextDay(false);
+      setIsModified(false);
+      // Clear snapshot cache when no project is selected
+      setSnapshotCache(new Map());
       return;
     }
 
     // Load project metadata and snapshots
     setIsLoading(true);
-    const currentProjectName = selectedProjectName;
     const loadSnapshots = async () => {
       try {
         // Load project metadata to check ownership
         const projects = await getProjects();
         const project = projects.find((p) => p.id === selectedProjectId);
         setSelectedProject(project || null);
+        // Update selectedProjectName with the actual project name from metadata
+        const projectNameFromMetadata = project?.name || null;
+        if (projectNameFromMetadata) {
+          setSelectedProjectName(projectNameFromMetadata);
+        }
         
         const snapshots = await getProjectSnapshots(selectedProjectId);
         setProjectSnapshots(snapshots);
+        
+        // Clear cache and preload up to 10 snapshots (starting from most recent)
+        const newCache = new Map<string, ProjectData>();
+        if (snapshots.length > 0) {
+          // Preload up to 10 snapshots, starting from the most recent (last index)
+          const snapshotsToPreload = snapshots.slice(-10).reverse(); // Get last 10, most recent first
+          const preloadPromises = snapshotsToPreload.map(async (snapshot) => {
+            try {
+              const data = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+              if (data) {
+                newCache.set(snapshot.id, data);
+              }
+            } catch (error) {
+              console.error(`Error preloading snapshot ${snapshot.id}:`, error);
+            }
+          });
+          await Promise.all(preloadPromises);
+        }
+        setSnapshotCache(newCache);
+        
         if (snapshots.length > 0) {
           const lastIndex = snapshots.length - 1;
           const snapshot = snapshots[lastIndex];
           setCurrentSnapshotIndex(lastIndex);
-          const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+          
+          // Check cache first
+          let snapshotData = newCache.get(snapshot.id);
+          if (!snapshotData) {
+            const fetchedData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+            if (fetchedData) {
+              snapshotData = fetchedData;
+              newCache.set(snapshot.id, fetchedData);
+              setSnapshotCache(new Map(newCache));
+            }
+          }
+          
           if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
             const convertedEpics = convertScopesToEpics(snapshotData.scopes);
             const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
             setProjectDataState(
               convertedEpics,
-              snapshotData.project || currentProjectName || null,
+              snapshotData.project || projectNameFromMetadata || null,
               date
             );
           } else {
-            setProjectDataState([], currentProjectName || null, null);
+            setProjectDataState([], projectNameFromMetadata || null, null);
           }
           setHasPreviousDay(lastIndex > 0);
           setHasNextDay(lastIndex < snapshots.length - 1);
@@ -309,7 +367,7 @@ const App: React.FC = () => {
               setProjectDataState(convertedEpics, data.project, date);
             }
           } else {
-            setProjectDataState([], currentProjectName || null, null);
+            setProjectDataState([], projectNameFromMetadata || null, null);
           }
           setHasPreviousDay(false);
           setHasNextDay(false);
@@ -398,7 +456,31 @@ const App: React.FC = () => {
     const snapshot = projectSnapshots[index];
     setIsLoading(true);
     try {
-      const snapshotData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+      // Check cache first
+      let snapshotData = snapshotCache.get(snapshot.id);
+      
+      if (!snapshotData) {
+        // Not in cache, fetch it
+        const fetchedData = await getProjectSnapshotData(selectedProjectId, snapshot.id);
+        
+        if (fetchedData) {
+          snapshotData = fetchedData;
+          // Add to cache, but limit to 10 entries
+          const newCache = new Map(snapshotCache);
+          newCache.set(snapshot.id, fetchedData);
+          
+          // If cache exceeds 10 entries, remove oldest (first entry)
+          if (newCache.size > 10) {
+            const firstEntry = newCache.keys().next();
+            if (!firstEntry.done && firstEntry.value) {
+              newCache.delete(firstEntry.value);
+            }
+          }
+          
+          setSnapshotCache(newCache);
+        }
+      }
+      
       if (snapshotData && snapshotData.scopes && snapshotData.scopes.length > 0) {
         const convertedEpics = convertScopesToEpics(snapshotData.scopes);
         const date = parseSnapshotDate(snapshot.id, snapshotData.generated);
@@ -444,15 +526,21 @@ const App: React.FC = () => {
     loadDataForDate(nextDate);
   };
 
+  // Only save to localStorage when a project is selected
   useEffect(() => {
+    if (!selectedProjectId) return;
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(epics));
     } catch {
       // ignore write errors
     }
-  }, [epics]);
+  }, [epics, selectedProjectId]);
 
   const handleUpdateEpicX = (key: string, x: number) => {
+    // Don't allow updates when no project is selected
+    if (!selectedProjectId) {
+      return;
+    }
     // Check if user can edit this project before allowing drag
     if (!canUserEditProject(selectedProject, user?.uid || null)) {
       setToast({
@@ -617,6 +705,9 @@ const App: React.FC = () => {
         return updated;
       });
     }
+    // Check if this was a newly added scope before removing it from the set
+    const wasNewlyAdded = newlyAddedScopes.has(epicKey);
+    
     // Remove from newlyAddedScopes once saved (scope is no longer "new")
     setNewlyAddedScopes((prev) => {
       const next = new Set(prev);
@@ -635,6 +726,14 @@ const App: React.FC = () => {
     }
     setEditingField(null);
     setEditValue("");
+    
+    // If this was a newly added scope and we're saving the title, automatically add another scope
+    if (wasNewlyAdded && field === "title") {
+      // Use setTimeout to ensure state updates are complete before adding new scope
+      setTimeout(() => {
+        handleAddScope();
+      }, 0);
+    }
   };
 
   const handleCancelEdit = (epicKey?: string) => {
@@ -687,6 +786,20 @@ const App: React.FC = () => {
   };
 
   const handleProjectSelect = (projectId: string | null) => {
+    // If switching to a different project, clear the screen immediately
+    if (projectId && projectId !== selectedProjectId) {
+      setEpics([]);
+      setOriginalEpics([]);
+      setProjectName(null);
+      setCurrentDate(null);
+      setProjectSnapshots([]);
+      setCurrentSnapshotIndex(null);
+      setHasPreviousDay(false);
+      setHasNextDay(false);
+      setIsModified(false);
+      setIsLoading(true); // Show loading state immediately
+    }
+    
     setSelectedProjectId(projectId);
     // Update URL
     updateUrlForProject(projectId);
@@ -811,11 +924,11 @@ const App: React.FC = () => {
       }
     }
     
-    // Reset all state to fresh state
+    // Reset all state to blank state
     setSelectedProjectId(null);
     setSelectedProjectName(null);
-    setEpics(DEFAULT_EPICS);
-    setOriginalEpics(DEFAULT_EPICS);
+    setEpics([]);
+    setOriginalEpics([]);
     setProjectName(null);
     setCurrentDate(null);
     setHasPreviousDay(false);
@@ -1202,27 +1315,27 @@ const App: React.FC = () => {
                 minWidth: 150,
               }}
             />
-          ) : (
+          ) : selectedProjectId && !isLoading ? (
             <h2
               style={{
                 margin: 0,
                 color: colors.textPrimary,
-                cursor: selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) ? "pointer" : "default",
+                cursor: canUserEditProject(selectedProject, user?.uid || null) ? "pointer" : "default",
               }}
               onClick={() => {
-                if (selectedProjectId && canUserEditProject(selectedProject, user?.uid || null)) {
+                if (canUserEditProject(selectedProject, user?.uid || null)) {
                   setEditingTitleValue(projectName || "New Project");
                   setIsEditingTitle(true);
-                } else if (selectedProjectId) {
+                } else {
                   setToast({
                     message: "You don't have permission to edit this project. Only the project creator can edit it.",
                     type: 'error',
                   });
                 }
               }}
-              title={selectedProjectId && canUserEditProject(selectedProject, user?.uid || null) ? "Click to edit title" : selectedProjectId ? "Only the project creator can edit this project" : undefined}
+              title={canUserEditProject(selectedProject, user?.uid || null) ? "Click to edit title" : "Only the project creator can edit this project"}
             >
-              {selectedProjectId && projectName ? projectName : "New Project"}
+              {projectName || "New Project"}
               {currentDate && (
                 <span style={{ 
                   fontSize: "0.6em", 
@@ -1234,7 +1347,7 @@ const App: React.FC = () => {
                 </span>
               )}
             </h2>
-          )}
+          ) : null}
         </div>
         {selectedProjectId && currentSnapshotIndex !== null && !isModified && canUserEditProject(selectedProject, user?.uid || null) && (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -1326,34 +1439,95 @@ const App: React.FC = () => {
         )}
       </div>
 
-      <div style={{ backgroundColor: colors.bgPrimary }}>
-        <HillChart 
-          epics={epics} 
-          onUpdateEpicX={handleUpdateEpicX}
-          title={selectedProjectId && projectName ? projectName : "New Project"}
-          date={currentDate}
-        />
-      </div>
-
-      <div style={{ marginTop: 24, display: "flex", gap: 24, alignItems: "flex-start" }}>
-        <div style={{ flex: 2 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <h3 style={{ margin: 0, color: colors.textPrimary }}>Scopes on this hill</h3>
-            {canUserEditProject(selectedProject, user?.uid || null) && (
-              <button
-                type="button"
-                onClick={handleAddScope}
-                disabled={isLoading}
-                style={getButtonStyles(colors, {
-                  variant: "info",
-                  disabled: isLoading,
-                })}
+      {isLoading && selectedProjectId ? (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            minHeight: "400px",
+            gap: 16,
+            color: colors.textSecondary,
+          }}
+        >
+          <svg
+            width="32"
+            height="32"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{
+              animation: "spin 1s linear infinite",
+            }}
+          >
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+            <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+            <path d="M21 21v-5h-5" />
+          </svg>
+          <div style={{ fontSize: 14 }}>Loading project...</div>
+        </div>
+      ) : (
+        <div style={{ backgroundColor: colors.bgPrimary, position: 'relative' }}>
+          <HillChart 
+            epics={epics} 
+            onUpdateEpicX={handleUpdateEpicX}
+            title={selectedProjectId ? (projectName || "New Project") : ""}
+            date={currentDate}
+          />
+          {!selectedProjectId && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                pointerEvents: 'none',
+              }}
+            >
+              <div
+                style={{
+                  color: colors.textSecondary,
+                  fontSize: 14,
+                  textAlign: 'center',
+                  padding: '0 24px',
+                }}
               >
-                <span>+</span>
-                <span>Add Scope</span>
-              </button>
-            )}
-          </div>
+                Select a project from the list or create a new project to get started
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isLoading && selectedProjectId && (
+        <div style={{ marginTop: 24, display: "flex", gap: 24, alignItems: "flex-start" }}>
+          <div style={{ flex: 2 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+              <h3 style={{ margin: 0, color: colors.textPrimary }}>Scopes on this hill</h3>
+              {canUserEditProject(selectedProject, user?.uid || null) && (
+                <button
+                  type="button"
+                  onClick={handleAddScope}
+                  disabled={isLoading}
+                  style={getButtonStyles(colors, {
+                    variant: "info",
+                    disabled: isLoading,
+                  })}
+                >
+                  <span>+</span>
+                  <span>Add Scope</span>
+                </button>
+              )}
+            </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
@@ -1485,6 +1659,7 @@ const App: React.FC = () => {
           </table>
         </div>
       </div>
+      )}
     </div>
     </>
   );
